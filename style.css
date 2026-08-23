@@ -73,5 +73,5 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 20px; heigh
 .main-btn { background-color: transparent; border: 2px solid var(--pink-accent); margin-top: 1rem; }
 .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
 .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; height: var(--nav-height); background-color: var(--panel-bg); display: flex; align-items: center; border-top: 1px solid #f0f0f0; z-index: 20; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; padding: 0 1rem; gap: 1.5rem; }
-.tab-btn { background: none; border: none; font-family: inherit; font-size: 0.75rem; font-weight: 700; color: var(--text-light); cursor: pointer; padding: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; flex-shrink: 0; }
+.tab-btn { background: none; border: none; font-family: inherit; font-size: 0.75rem; font-weight: 700; color: var(--text-light); cursor: pointer; padding: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; flex-shrink: 0; transition: color 0.2s; }
 .tab-btn.active { color: var(--blue-hover); }
