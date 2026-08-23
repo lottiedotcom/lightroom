@@ -5,23 +5,17 @@ const MAX_PREVIEW_SIZE = 800;
 let previewWidth = 0, previewHeight = 0;
 
 let settings = {
-    // Light
     exposure: 0, contrast: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
-    // Color
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
-    // Point Color
     pickedH: -1, pickedS: 0, pickedL: 0, pointHue: 0, pointSat: 0, pointLum: 0,
-    // 8-Channel HSL 
     redH: 0, redS: 0, redL: 0, orgH: 0, orgS: 0, orgL: 0, yelH: 0, yelS: 0, yelL: 0,
     grnH: 0, grnS: 0, grnL: 0, aquH: 0, aquS: 0, aquL: 0, bluH: 0, bluS: 0, bluL: 0,
     purH: 0, purS: 0, purL: 0, magH: 0, magS: 0, magL: 0,
-    // Grading
     gradShadH: 0, gradShadS: 0, gradMidH: 0, gradMidS: 0, gradHighH: 0, gradHighS: 0,
-    // Presence & Detail
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// --- History System (Undo / Redo) ---
+// --- History System ---
 let history = [];
 let historyIndex = -1;
 
@@ -57,19 +51,32 @@ document.getElementById('redo-btn').addEventListener('click', () => {
 
 saveHistory();
 
-// --- UI Navigation ---
+// --- UI Navigation & Collapse Logic ---
 const tabBtns = document.querySelectorAll('.tab-btn');
 const toolPanels = document.querySelectorAll('.tool-panel');
+
 tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
+        const targetId = btn.dataset.target;
+        const targetPanel = document.getElementById(targetId);
+
+        // If the tab is already active, collapse it
+        if (btn.classList.contains('active')) {
+            btn.classList.remove('active');
+            targetPanel.classList.remove('active');
+            return;
+        }
+
+        // Otherwise open it
         tabBtns.forEach(t => t.classList.remove('active'));
         toolPanels.forEach(p => p.classList.remove('active'));
+        
         btn.classList.add('active');
-        document.getElementById(btn.dataset.target).classList.add('active');
+        targetPanel.classList.add('active');
     });
 });
 
-// --- Sliders & Numeric Inputs (Two-Way Binding) ---
+// --- Sliders & Numeric Inputs ---
 const sliders = document.querySelectorAll('input[type="range"]');
 const numInputs = document.querySelectorAll('.val-input');
 
@@ -90,15 +97,11 @@ sliders.forEach(slider => {
         if (numInp) numInp.value = val;
         requestAnimationFrame(renderPreview); 
     });
-    slider.addEventListener('change', () => {
-        saveHistory();
-    });
+    slider.addEventListener('change', () => { saveHistory(); });
 });
 
 numInputs.forEach(numInp => {
     const settingKey = numInp.id.replace('num-', '');
-    
-    // Live update when typing
     numInp.addEventListener('input', (e) => {
         let val = parseFloat(e.target.value);
         if (isNaN(val)) return;
@@ -112,7 +115,6 @@ numInputs.forEach(numInp => {
         requestAnimationFrame(renderPreview);
     });
 
-    // Save history and sanitize on blur / enter
     numInp.addEventListener('change', (e) => {
         let val = parseFloat(e.target.value);
         if (isNaN(val)) val = 0;
@@ -121,8 +123,6 @@ numInputs.forEach(numInp => {
         if (!isNaN(max) && val > max) val = max;
         numInp.value = val;
         settings[settingKey] = val;
-        const slider = document.getElementById(settingKey);
-        if (slider) slider.value = val;
         updateUI();
         saveHistory();
     });
@@ -151,37 +151,29 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
     reader.readAsDataURL(file);
 });
 
-// --- Intuitive Auto Enhancement Engine ---
+// --- Intuitive Auto Enhancement ---
 document.getElementById('auto-btn').addEventListener('click', () => {
     if (!originalImage) return;
 
-    // Draw untouched preview to a temporary canvas for pixel inspection
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = previewWidth;
-    tempCanvas.height = previewHeight;
+    tempCanvas.width = previewWidth; tempCanvas.height = previewHeight;
     const tCtx = tempCanvas.getContext('2d');
     tCtx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
     const rawData = tCtx.getImageData(0, 0, previewWidth, previewHeight).data;
     const totalPixels = rawData.length / 4;
-
     let sumR = 0, sumG = 0, sumB = 0, sumLum = 0;
     const histogram = new Array(256).fill(0);
 
     for (let i = 0; i < rawData.length; i += 4) {
         const r = rawData[i], g = rawData[i+1], b = rawData[i+2];
         const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-        sumR += r; sumG += g; sumB += b;
-        sumLum += lum;
+        sumR += r; sumG += g; sumB += b; sumLum += lum;
         histogram[lum]++;
     }
 
-    const avgR = sumR / totalPixels;
-    const avgG = sumG / totalPixels;
-    const avgB = sumB / totalPixels;
-    const avgLum = sumLum / totalPixels;
+    const avgR = sumR / totalPixels, avgG = sumG / totalPixels, avgB = sumB / totalPixels, avgLum = sumLum / totalPixels;
 
-    // 1. Calculate Percentiles (1% shadow floor, 99% highlight ceiling)
     let count = 0, p1 = 0, p99 = 255;
     for (let i = 0; i < 256; i++) {
         count += histogram[i];
@@ -189,42 +181,29 @@ document.getElementById('auto-btn').addEventListener('click', () => {
         if (count >= totalPixels * 0.99) { p99 = i; break; }
     }
 
-    // 2. Exposure: target mid-tone balance around 128
     let targetExp = (128 - avgLum) * 0.5;
     settings.exposure = Math.round(Math.max(-40, Math.min(40, targetExp)));
 
-    // 3. Contrast & Tone Curve (Dynamic Range Stretching)
     let dynamicRange = p99 - p1;
-    if (dynamicRange < 180) {
-        settings.contrast = Math.round(Math.min(35, (180 - dynamicRange) * 0.35));
-    } else if (dynamicRange > 240) {
-        settings.contrast = -10; // Soften harsh blown contrast
-    } else {
-        settings.contrast = 5;
-    }
+    if (dynamicRange < 180) settings.contrast = Math.round(Math.min(35, (180 - dynamicRange) * 0.35));
+    else if (dynamicRange > 240) settings.contrast = -10;
+    else settings.contrast = 5;
 
-    // 4. Highlights and Shadows Balancing
-    if (p99 > 240) settings.highlights = -25; // Pull back harsh blown highlights
+    if (p99 > 240) settings.highlights = -25;
     else if (p99 < 200) settings.highlights = 15;
 
-    if (p1 < 15) settings.shadows = 25; // Lift crushed dark shadows
+    if (p1 < 15) settings.shadows = 25;
     else if (p1 > 40) settings.shadows = -10;
 
     settings.whites = Math.round(Math.max(-20, Math.min(20, (240 - p99) * 0.3)));
     settings.blacks = Math.round(Math.max(-20, Math.min(20, (p1 - 10) * 0.3)));
 
-    // 5. White Balance (Gray-World Color Cast Correction)
     const avgGray = (avgR + avgG + avgB) / 3;
-    // Temp: warm vs cool cast
-    const rDiff = avgR - avgGray;
-    const bDiff = avgB - avgGray;
+    const rDiff = avgR - avgGray, bDiff = avgB - avgGray;
     settings.temp = Math.round(Math.max(-30, Math.min(30, (bDiff - rDiff) * 0.4)));
 
-    // Tint: green vs magenta cast
     const gDiff = avgG - ((avgR + avgB) / 2);
     settings.tint = Math.round(Math.max(-25, Math.min(25, -gDiff * 0.5)));
-
-    // 6. Color Pop: clean subtle vibrance boost
     settings.vibrance = 12;
 
     updateUI();
@@ -294,6 +273,7 @@ function rgbToHsl(r, g, b) {
     }
     return [h * 360, s, l];
 }
+
 function hslToRgb(h, s, l) {
     let r, g, b;
     if (s === 0) r = g = b = l; 
@@ -324,9 +304,12 @@ function applyCurve(lum, high, light, dark, shadow) {
 // --- Main Processing Engine ---
 function processPixels(data, width, height) {
     const factor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
+    const cx = width / 2; const cy = height / 2;
+    const maxDist = Math.sqrt(cx*cx + cy*cy);
 
     for (let i = 0; i < data.length; i += 4) {
         let r = data[i], g = data[i + 1], b = data[i + 2];
+        let x = (i / 4) % width, y = Math.floor((i / 4) / width);
 
         // 1. Exposure & Light
         let exp = 1 + (settings.exposure / 100);
@@ -342,6 +325,11 @@ function processPixels(data, width, height) {
             g -= dAmt * 25 * darkFactor; 
             b -= dAmt * 40 * darkFactor; 
         }
+
+        // CRITICAL BUG FIX: Clamp RGB before passing to HSL to prevent mathematical NaNs
+        r = Math.max(0, Math.min(255, r));
+        g = Math.max(0, Math.min(255, g));
+        b = Math.max(0, Math.min(255, b));
 
         // 3. HSL & Point Color
         let [h, s, l] = rgbToHsl(r, g, b);
@@ -374,7 +362,7 @@ function processPixels(data, width, height) {
         }
 
         // 4. Tone Curve & Highlights/Shadows
-        let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+        let luminance = Math.max(0, Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b));
         let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
         let cRatio = cLum / (luminance + 0.001);
         r *= cRatio; g *= cRatio; b *= cRatio;
@@ -482,4 +470,5 @@ document.getElementById('download-btn').onclick = () => {
     }, 50);
 };
 
+// Start UI with the first panel open
 document.getElementById('panel-presets').classList.add('active');
