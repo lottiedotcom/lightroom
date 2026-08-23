@@ -16,54 +16,69 @@ const processBtn = document.getElementById('process-btn');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-// 1. Handle DNG Upload and Metadata Extraction
+// Helper function to aggressively search for Adobe metadata formats
+function extractValue(text, attributeRegex, nodeRegex) {
+    const attrMatch = text.match(attributeRegex);
+    if (attrMatch) return parseFloat(attrMatch[1]);
+    
+    const nodeMatch = text.match(nodeRegex);
+    if (nodeMatch) return parseFloat(nodeMatch[1]);
+    
+    return null;
+}
+
+// 1. Handle Preset Upload and Metadata Extraction
 dngUpload.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
+    dngStatus.textContent = "Analyzing preset...";
+
     const reader = new FileReader();
     
-    // Read the DNG file as text to scrape the XMP metadata block
+    // Read as ArrayBuffer to safely bypass binary image data
     reader.onload = function(event) {
-        const text = event.target.result;
+        const buffer = event.target.result;
         
-        // Use RegEx to find basic Camera Raw Settings in the XMP block
-        // Note: Adobe stores Exposure as a decimal (e.g., +1.5 or -0.5)
-        const exposureMatch = text.match(/crs:Exposure2012="([^"]+)"/);
-        const contrastMatch = text.match(/crs:Contrast2012="([^"]+)"/);
-        const saturationMatch = text.match(/crs:Saturation="([^"]+)"/);
+        // Decode the binary safely - this exposes the hidden XMP/XML text
+        const decoder = new TextDecoder('utf-8', { fatal: false });
+        const text = decoder.decode(buffer);
+        
+        // Aggressively search for Exposure, Contrast, and Saturation in both formats
+        const exp = extractValue(text, /crs:Exposure2012="([^"]+)"/, /<crs:Exposure2012>([^<]+)<\/crs:Exposure2012>/);
+        const contrast = extractValue(text, /crs:Contrast2012="([^"]+)"/, /<crs:Contrast2012>([^<]+)<\/crs:Contrast2012>/);
+        const sat = extractValue(text, /crs:Saturation="([^"]+)"/, /<crs:Saturation>([^<]+)<\/crs:Saturation>/);
+
+        // Check if we actually found Adobe metadata
+        if (exp === null && contrast === null && sat === null) {
+            dngStatus.textContent = "⚠️ No Adobe preset data found in this file. Try exporting it directly from Lightroom again.";
+            dngStatus.style.color = "#ff4d4d";
+            return;
+        }
+
+        dngStatus.style.color = "inherit";
 
         // Convert Adobe's proprietary values to CSS Canvas Filter percentages
-        if (exposureMatch) {
-            const exp = parseFloat(exposureMatch[1]);
-            // Rough mapping: +1 exposure ~ 130% brightness
-            extractedSettings.brightness = 100 + (exp * 30); 
-        }
-        if (contrastMatch) {
-            const contrast = parseFloat(contrastMatch[1]);
-            // Rough mapping: +20 contrast ~ 120% contrast
-            extractedSettings.contrast = 100 + contrast; 
-        }
-        if (saturationMatch) {
-            const sat = parseFloat(saturationMatch[1]);
-            extractedSettings.saturate = 100 + sat; 
-        }
+        if (exp !== null) extractedSettings.brightness = 100 + (exp * 30); 
+        if (contrast !== null) extractedSettings.contrast = 100 + contrast; 
+        if (sat !== null) extractedSettings.saturate = 100 + sat; 
 
-        dngStatus.textContent = `Preset loaded! (B: ${Math.round(extractedSettings.brightness)}%, C: ${Math.round(extractedSettings.contrast)}%, S: ${Math.round(extractedSettings.saturate)}%)`;
+        dngStatus.textContent = `✅ Preset loaded! (Bright: ${Math.round(extractedSettings.brightness)}%, Cont: ${Math.round(extractedSettings.contrast)}%, Sat: ${Math.round(extractedSettings.saturate)}%)`;
         
         // Unlock the photo upload button
         photoUpload.disabled = false;
         photoLabel.classList.remove('disabled');
     };
     
-    reader.readAsText(file); // Reading as text to catch the raw XML/XMP
+    // Crucial change: Read as ArrayBuffer, not Text
+    reader.readAsArrayBuffer(file); 
 });
 
 // 2. Handle Photo Selection
 photoUpload.addEventListener('change', (e) => {
     selectedPhotos = Array.from(e.target.files);
     if (selectedPhotos.length > 0) {
-        photoStatus.textContent = `${selectedPhotos.length} photo(s) selected ready for batching.`;
+        photoStatus.textContent = `${selectedPhotos.length} photo(s) selected. Ready!`;
         processBtn.disabled = false;
     }
 });
@@ -117,4 +132,4 @@ function loadImage(file) {
         };
         reader.readAsDataURL(file);
     });
-}
+                      }
