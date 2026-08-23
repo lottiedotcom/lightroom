@@ -54,6 +54,7 @@ saveHistory();
 // --- UI Navigation & Collapse Logic ---
 const tabBtns = document.querySelectorAll('.tab-btn');
 const toolPanels = document.querySelectorAll('.tool-panel');
+const mainPanelsContainer = document.getElementById('main-panels-container');
 
 tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -64,14 +65,17 @@ tabBtns.forEach(btn => {
         if (btn.classList.contains('active')) {
             btn.classList.remove('active');
             targetPanel.classList.remove('active');
+            mainPanelsContainer.style.display = 'none'; // Completely hide the white container
             return;
         }
 
+        // Open a new tab
         tabBtns.forEach(t => t.classList.remove('active'));
         toolPanels.forEach(p => p.classList.remove('active'));
         
         btn.classList.add('active');
         targetPanel.classList.add('active');
+        mainPanelsContainer.style.display = 'block'; // Bring container back
     });
 });
 
@@ -138,7 +142,6 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
         originalImage.onload = () => {
             const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(originalImage.width, originalImage.height));
             
-            // CRITICAL FIX: Math.floor prevents mobile browsers from breaking the canvas buffer with floating points
             previewWidth = Math.floor(originalImage.width * scale);
             previewHeight = Math.floor(originalImage.height * scale);
             
@@ -146,7 +149,11 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
             document.getElementById('status').style.display = 'none';
             document.getElementById('download-btn').disabled = false;
             document.getElementById('auto-btn').disabled = false;
-            renderPreview();
+            
+            // CRITICAL FIX: Delay allows the browser to actually decode the pixel graphics before math runs
+            setTimeout(() => {
+                renderPreview();
+            }, 50);
         };
         originalImage.src = event.target.result;
     };
@@ -262,8 +269,6 @@ canvas.addEventListener('click', (e) => {
 function rgbToHsl(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     let max = Math.max(r, g, b), min = Math.min(r, g, b);
-    
-    // CRITICAL FIX: explicit declarations to prevent NaN scoping issues
     let h = 0, s = 0, l = (max + min) / 2; 
     
     if (max !== min) {
@@ -320,6 +325,8 @@ function getGradingColor(hue, sat, luminanceWeight) {
 // --- Main Processing Engine ---
 function processPixels(data, width, height) {
     const factor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
+    const cx = width / 2; const cy = height / 2;
+    const maxDist = Math.sqrt(cx*cx + cy*cy);
 
     for (let i = 0; i < data.length; i += 4) {
         let r = data[i], g = data[i + 1], b = data[i + 2];
@@ -338,12 +345,10 @@ function processPixels(data, width, height) {
             b -= dAmt * 40 * darkFactor; 
         }
 
-        // CRITICAL FIX: Clamp RGB tightly to prevent math blowing up later
         r = Math.max(0, Math.min(255, r));
         g = Math.max(0, Math.min(255, g));
         b = Math.max(0, Math.min(255, b));
 
-        // HSL & Point Color
         let [h, s, l] = rgbToHsl(r, g, b);
         let hMod = 0, sMod = 0, lMod = 0;
 
@@ -362,21 +367,19 @@ function processPixels(data, width, height) {
                 let strength = 1 - (hueDist / 30);
                 hMod += settings.pointHue * strength;
                 sMod += settings.pointSat * strength;
-                lMod += settings.pointLum * strength; // Raw val here, divided below
+                lMod += settings.pointLum * strength; 
             }
         }
 
         if (hMod !== 0 || sMod !== 0 || lMod !== 0) {
             h = (h + hMod + 360) % 360;
             s = Math.max(0, Math.min(1, s + (sMod / 100)));
-            // CRITICAL FIX: divide lMod by 100 so you don't blast the lightness to NaN
             l = Math.max(0, Math.min(1, l + (lMod / 100))); 
             [r, g, b] = hslToRgb(h, s, l);
         }
 
         let luminance = Math.max(0, Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b));
         
-        // Color Grading safely merged back in
         if (settings.gradShadS > 0 && luminance < 128) {
             let weight = (128 - luminance) / 128;
             let [cR, cG, cB] = getGradingColor(settings.gradShadH, settings.gradShadS, weight);
@@ -393,9 +396,9 @@ function processPixels(data, width, height) {
             r += cR; g += cG; b += cB;
         }
 
-        // Tone Curves
+        // CRITICAL FIX: Safe Tone Curve Math
         let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
-        let cRatio = cLum / (luminance + 0.001);
+        let cRatio = (luminance <= 0) ? 0 : (cLum / luminance);
         r *= cRatio; g *= cRatio; b *= cRatio;
 
         if (luminance > 128) {
@@ -423,6 +426,20 @@ function processPixels(data, width, height) {
         r += (r - avgRGB) * totalSat; g += (g - avgRGB) * totalSat; b += (b - avgRGB) * totalSat;
 
         r = factor * (r - 128) + 128; g = factor * (g - 128) + 128; b = factor * (b - 128) + 128;
+
+        // Added Vignette Back
+        if (settings.vignette !== 0) {
+            let dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+            let vigAmt = (settings.vignette / 100); 
+            let vigMod = 1 + (vigAmt * Math.pow(dist / maxDist, 2)); 
+            r *= vigMod; g *= vigMod; b *= vigMod;
+        }
+
+        // Added Grain Back
+        if (settings.grain > 0) {
+            let noise = (Math.random() - 0.5) * settings.grain;
+            r += noise; g += noise; b += noise;
+        }
 
         data[i] = Math.min(255, Math.max(0, r));
         data[i+1] = Math.min(255, Math.max(0, g));
@@ -473,8 +490,6 @@ document.getElementById('download-btn').onclick = () => {
     btn.textContent = '⏳'; 
     setTimeout(() => {
         const exportCanvas = document.createElement('canvas');
-        
-        // CRITICAL FIX: floor exports to prevent DOMExceptions
         exportCanvas.width = Math.floor(originalImage.width); 
         exportCanvas.height = Math.floor(originalImage.height);
         
