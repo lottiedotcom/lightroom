@@ -3,40 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Preset Batcher</title>
+    <title>Plum's Photo Editor</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Google Fonts for a cute, soft look -->
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
-    <!-- JSZip for local batch downloading -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <!-- FileSaver for triggering the download -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1>✨ Preset Batcher ✨</h1>
-        <p class="subtitle">Apply your Lightroom DNG settings to multiple photos locally.</p>
-
-        <div class="upload-section">
-            <div class="card dng-card">
-                <h3>1. Upload DNG Preset</h3>
-                <input type="file" id="dng-upload">
-                <label for="dng-upload" class="btn pink-btn">Choose DNG File</label>
-                <p id="dng-status" class="status-text">No preset loaded yet.</p>
+    <div class="app-container">
+        <!-- Sidebar Controls -->
+        <aside class="sidebar">
+            <h2>✨ Editor ✨</h2>
+            
+            <div class="control-group">
+                <button id="upload-btn" class="btn blue-btn">Upload Photo</button>
+                <input type="file" id="file-upload" accept="image/*" hidden>
+                <button id="download-btn" class="btn blue-btn">Download Image</button>
             </div>
 
-            <div class="card photos-card">
-                <h3>2. Upload Photos</h3>
-                <input type="file" id="photo-upload" accept="image/jpeg, image/png" multiple disabled>
-                <label for="photo-upload" class="btn blue-btn" id="photo-label">Choose Target Photos</label>
-                <p id="photo-status" class="status-text">0 photos selected.</p>
+            <div class="control-group preset-group">
+                <h3>Presets</h3>
+                <div class="preset-buttons">
+                    <button id="copy-preset" class="btn pink-btn small">Copy</button>
+                    <button id="paste-preset" class="btn pink-btn small">Paste</button>
+                    <button id="save-preset" class="btn pink-btn small">Save</button>
+                    <button id="load-preset-btn" class="btn pink-btn small">Load</button>
+                    <input type="file" id="load-preset" accept=".json" hidden>
+                </div>
             </div>
-        </div>
 
-        <button id="process-btn" class="btn main-btn" disabled>Batch Process & Download</button>
-        
-        <!-- Hidden canvas for processing -->
-        <canvas id="canvas" style="display: none;"></canvas>
+            <div class="sliders-container">
+                <!-- Light -->
+                <h3>Light</h3>
+                <label>Exposure <input type="range" id="exposure" min="-100" max="100" value="0"></label>
+                <label>Contrast <input type="range" id="contrast" min="-100" max="100" value="0"></label>
+                <label>Highlights <input type="range" id="highlights" min="-100" max="100" value="0"></label>
+                <label>Shadows <input type="range" id="shadows" min="-100" max="100" value="0"></label>
+                <label>Whites <input type="range" id="whites" min="-100" max="100" value="0"></label>
+                <label>Blacks <input type="range" id="blacks" min="-100" max="100" value="0"></label>
+
+                <!-- Color -->
+                <h3>Color</h3>
+                <label>Temperature <input type="range" id="temp" min="-100" max="100" value="0"></label>
+                <label>Tint <input type="range" id="tint" min="-100" max="100" value="0"></label>
+                <label>Vibrance <input type="range" id="vibrance" min="-100" max="100" value="0"></label>
+                <label>Saturation <input type="range" id="saturation" min="-100" max="100" value="0"></label>
+
+                <!-- Effects -->
+                <h3>Effects</h3>
+                <label>Blur <input type="range" id="blur" min="0" max="50" value="0"></label>
+                <label>Clarity <input type="range" id="clarity" min="-100" max="100" value="0"></label>
+                <label>Grain <input type="range" id="grain" min="0" max="100" value="0"></label>
+                
+                <button id="reset-btn" class="btn main-btn">Reset All</button>
+            </div>
+        </aside>
+
+        <!-- Main Preview Area -->
+        <main class="preview-area">
+            <canvas id="canvas"></canvas>
+            <p id="status">Upload an image to start editing 🎀</p>
+        </main>
     </div>
 
     <script src="script.js"></script>
