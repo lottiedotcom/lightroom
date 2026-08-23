@@ -38,7 +38,6 @@ h4 { font-size: 0.95rem; margin-bottom: 0.5rem; margin-top: 1rem; }
 .slider-group { margin-bottom: 1.2rem; }
 .slider-label { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 700; margin-bottom: 0.3rem; }
 
-/* Direct Numeric Input Styling */
 .val-input {
     width: 60px;
     padding: 2px 6px;
