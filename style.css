@@ -1,0 +1,129 @@
+:root {
+    --bg-color: #fff0f5; /* Lavender Blush / Soft Pink */
+    --card-bg: #ffffff;
+    --text-color: #5c4d5c;
+    --pink-accent: #ffb6c1; /* Light Pink */
+    --pink-hover: #ff9eb0;
+    --blue-accent: #bfe6ff; /* Light Blue */
+    --blue-hover: #a8dfff;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: 'Quicksand', sans-serif;
+    margin: 0;
+    padding: 2rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+}
+
+.container {
+    background-color: var(--card-bg);
+    padding: 3rem;
+    border-radius: 24px;
+    box-shadow: 0 10px 30px rgba(255, 182, 193, 0.3);
+    max-width: 600px;
+    width: 100%;
+    text-align: center;
+}
+
+h1 {
+    margin: 0;
+    color: var(--pink-hover);
+    font-size: 2.5rem;
+}
+
+.subtitle {
+    color: #998a99;
+    margin-bottom: 2.5rem;
+}
+
+.upload-section {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2.5rem;
+}
+
+.card {
+    flex: 1;
+    background-color: var(--bg-color);
+    padding: 1.5rem;
+    border-radius: 16px;
+    border: 2px dashed #ffb6c1;
+}
+
+.card.photos-card {
+    border-color: var(--blue-accent);
+}
+
+h3 {
+    margin-top: 0;
+    font-size: 1.1rem;
+}
+
+/* Hide default file inputs */
+input[type="file"] {
+    display: none;
+}
+
+.btn {
+    display: inline-block;
+    padding: 0.8rem 1.5rem;
+    border-radius: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s, background-color 0.2s;
+    border: none;
+    font-size: 1rem;
+    color: var(--text-color);
+}
+
+.btn:active {
+    transform: scale(0.95);
+}
+
+.pink-btn {
+    background-color: var(--pink-accent);
+}
+
+.pink-btn:hover {
+    background-color: var(--pink-hover);
+}
+
+.blue-btn {
+    background-color: var(--blue-accent);
+}
+
+.blue-btn:hover {
+    background-color: var(--blue-hover);
+}
+
+.main-btn {
+    width: 100%;
+    background-color: var(--pink-accent);
+    color: white;
+    font-size: 1.2rem;
+    padding: 1rem;
+    box-shadow: 0 4px 15px rgba(255, 182, 193, 0.5);
+}
+
+.main-btn:hover:not(:disabled) {
+    background-color: var(--pink-hover);
+}
+
+.main-btn:disabled, .blue-btn.disabled {
+    background-color: #e0e0e0;
+    cursor: not-allowed;
+    box-shadow: none;
+    color: #999;
+}
+
+.status-text {
+    font-size: 0.85rem;
+    margin-top: 1rem;
+    margin-bottom: 0;
+    font-weight: bold;
+}
