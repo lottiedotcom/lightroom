@@ -1,125 +1,199 @@
 :root {
-    --bg-main: #fff0f5; /* Soft pink */
+    --bg-main: #fff0f5; /* Soft pink background */
     --panel-bg: #ffffff;
-    --text-color: #5c4d5c; /* Plum */
+    --text-color: #5c4d5c; /* Plum text */
+    --text-light: #998a99;
     --pink-accent: #ffb6c1;
     --pink-hover: #ff9eb0;
     --blue-accent: #bfe6ff;
     --blue-hover: #a8dfff;
     --border-radius: 16px;
+    --nav-height: 70px;
 }
 
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
 body {
-    margin: 0;
     font-family: 'Quicksand', sans-serif;
     background-color: var(--bg-main);
     color: var(--text-color);
-    display: flex;
     height: 100vh;
-    overflow: hidden;
+    width: 100vw;
+    overflow: hidden; /* Prevents whole-page scrolling on mobile */
+    touch-action: none; /* Prevents browser pull-to-refresh */
 }
 
 .app-container {
     display: flex;
-    width: 100%;
+    flex-direction: column;
     height: 100%;
 }
 
-.sidebar {
-    width: 320px;
-    background-color: var(--panel-bg);
-    padding: 1.5rem;
-    box-shadow: 2px 0 15px rgba(255, 182, 193, 0.4);
+.top-bar {
     display: flex;
-    flex-direction: column;
-    overflow-y: auto;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    background-color: var(--panel-bg);
+    box-shadow: 0 2px 10px rgba(255, 182, 193, 0.2);
     z-index: 10;
 }
 
-h2 {
-    margin-top: 0;
+.top-bar h2 {
+    font-size: 1.2rem;
     color: var(--pink-hover);
-    text-align: center;
 }
 
-h3 {
-    font-size: 1rem;
-    border-bottom: 2px dashed var(--pink-accent);
-    padding-bottom: 0.5rem;
-    margin-top: 1.5rem;
-}
-
-.control-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.preset-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
-}
-
-.sliders-container label {
-    display: flex;
-    flex-direction: column;
-    font-size: 0.85rem;
-    font-weight: 700;
-    margin-bottom: 0.8rem;
-}
-
-input[type="range"] {
-    width: 100%;
-    accent-color: var(--blue-hover);
-    margin-top: 0.3rem;
-}
-
-.btn {
-    padding: 0.8rem;
-    border-radius: 12px;
-    font-weight: 700;
-    cursor: pointer;
+.icon-btn {
+    background: none;
     border: none;
-    transition: transform 0.1s, background-color 0.2s;
-    color: var(--text-color);
+    font-size: 1.5rem;
+    cursor: pointer;
+    opacity: 1;
+    transition: 0.2s;
 }
 
-.btn:active { transform: scale(0.95); }
-.btn.small { padding: 0.5rem; font-size: 0.8rem; }
-
-.pink-btn { background-color: var(--pink-accent); }
-.pink-btn:hover { background-color: var(--pink-hover); }
-
-.blue-btn { background-color: var(--blue-accent); }
-.blue-btn:hover { background-color: var(--blue-hover); }
-
-.main-btn {
-    background-color: var(--bg-main);
-    border: 2px solid var(--pink-accent);
-    margin-top: 1rem;
-}
+.icon-btn:disabled { opacity: 0.3; }
 
 .preview-area {
     flex: 1;
     display: flex;
     justify-content: center;
     align-items: center;
-    padding: 2rem;
+    padding: 1rem;
     position: relative;
+    overflow: hidden;
 }
 
 canvas {
     max-width: 100%;
     max-height: 100%;
-    border-radius: var(--border-radius);
-    box-shadow: 0 10px 30px rgba(92, 77, 92, 0.15);
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 5px 20px rgba(92, 77, 92, 0.1);
     display: none;
 }
 
 #status {
-    position: absolute;
-    font-weight: 700;
-    color: #998a99;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    align-items: center;
 }
+
+#status p { font-weight: 700; color: var(--text-light); }
+
+/* --- Slider Panels --- */
+.panels-container {
+    position: relative;
+    background-color: var(--panel-bg);
+    border-top-left-radius: 24px;
+    border-top-right-radius: 24px;
+    box-shadow: 0 -4px 20px rgba(255, 182, 193, 0.3);
+    z-index: 10;
+}
+
+.tool-panel {
+    display: none; /* Hidden by default */
+    padding: 1.5rem;
+    padding-bottom: calc(1.5rem + var(--nav-height)); /* Space for nav bar */
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.tool-panel.active { display: block; }
+
+.panel-header {
+    text-align: center;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    color: var(--text-color);
+    border-bottom: 2px dashed var(--pink-accent);
+    padding-bottom: 0.5rem;
+}
+
+/* Matching the Lightroom slider layout */
+.slider-group { margin-bottom: 1.5rem; }
+
+.slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+.slider-label .val { color: var(--text-light); }
+
+input[type="range"] {
+    width: 100%;
+    appearance: none;
+    height: 4px;
+    background: #e0e0e0; /* Gray track */
+    border-radius: 2px;
+    outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--blue-hover); /* Blue thumb */
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+/* Buttons */
+.btn {
+    padding: 0.8rem 1.2rem;
+    border-radius: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    color: var(--text-color);
+    width: 100%;
+}
+.blue-btn { background-color: var(--blue-accent); }
+.pink-btn { background-color: var(--pink-accent); }
+.main-btn { background-color: transparent; border: 2px solid var(--pink-accent); margin-top: 1rem; }
+
+.button-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.8rem;
+}
+
+/* --- Bottom Nav --- */
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: var(--nav-height);
+    background-color: var(--panel-bg);
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    border-top: 1px solid #f0f0f0;
+    z-index: 20;
+}
+
+.tab-btn {
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 0.5rem;
+    transition: color 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+.tab-btn.active { color: var(--blue-hover); }
