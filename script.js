@@ -60,14 +60,13 @@ tabBtns.forEach(btn => {
         const targetId = btn.dataset.target;
         const targetPanel = document.getElementById(targetId);
 
-        // If the tab is already active, collapse it
+        // Feature: If the tab is already active, collapse it to view the photo
         if (btn.classList.contains('active')) {
             btn.classList.remove('active');
             targetPanel.classList.remove('active');
             return;
         }
 
-        // Otherwise open it
         tabBtns.forEach(t => t.classList.remove('active'));
         toolPanels.forEach(p => p.classList.remove('active'));
         
@@ -138,8 +137,11 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
         originalImage = new Image();
         originalImage.onload = () => {
             const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(originalImage.width, originalImage.height));
-            previewWidth = originalImage.width * scale;
-            previewHeight = originalImage.height * scale;
+            
+            // CRITICAL FIX: Math.floor prevents mobile browsers from breaking the canvas buffer with floating points
+            previewWidth = Math.floor(originalImage.width * scale);
+            previewHeight = Math.floor(originalImage.height * scale);
+            
             canvas.style.display = 'block';
             document.getElementById('status').style.display = 'none';
             document.getElementById('download-btn').disabled = false;
@@ -260,24 +262,28 @@ canvas.addEventListener('click', (e) => {
 function rgbToHsl(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     let max = Math.max(r, g, b), min = Math.min(r, g, b);
-    let h, s, l = (max + min) / 2;
-    if (max === min) h = s = 0; 
-    else {
+    
+    // CRITICAL FIX: explicit declarations to prevent NaN scoping issues
+    let h = 0, s = 0, l = (max + min) / 2; 
+    
+    if (max !== min) {
         let d = max - min;
         s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
         switch (max) {
             case r: h = (g - b) / d + (g < b ? 6 : 0); break;
             case g: h = (b - r) / d + 2; break;
             case b: h = (r - g) / d + 4; break;
-        } h /= 6;
+        } 
+        h /= 6;
     }
     return [h * 360, s, l];
 }
 
 function hslToRgb(h, s, l) {
     let r, g, b;
-    if (s === 0) r = g = b = l; 
-    else {
+    if (s === 0) {
+        r = g = b = l; 
+    } else {
         let hue2rgb = (p, q, t) => {
             if (t < 0) t += 1; if (t > 1) t -= 1;
             if (t < 1/6) return p + (q - p) * 6 * t;
@@ -301,23 +307,29 @@ function applyCurve(lum, high, light, dark, shadow) {
     return lum + mod;
 }
 
+function getGradingColor(hue, sat, luminanceWeight) {
+    if (sat === 0) return [0, 0, 0];
+    const rgb = hslToRgb(hue, sat / 100, 0.5);
+    return [
+        (rgb[0] - 128) * luminanceWeight,
+        (rgb[1] - 128) * luminanceWeight,
+        (rgb[2] - 128) * luminanceWeight
+    ];
+}
+
 // --- Main Processing Engine ---
 function processPixels(data, width, height) {
     const factor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
-    const cx = width / 2; const cy = height / 2;
-    const maxDist = Math.sqrt(cx*cx + cy*cy);
 
     for (let i = 0; i < data.length; i += 4) {
         let r = data[i], g = data[i + 1], b = data[i + 2];
         let x = (i / 4) % width, y = Math.floor((i / 4) / width);
 
-        // 1. Exposure & Light
         let exp = 1 + (settings.exposure / 100);
         r *= exp; g *= exp; b *= exp;
         r += settings.temp * 0.5; b -= settings.temp * 0.5;
         g += settings.tint * 0.5;
 
-        // 2. Dehaze
         if (settings.dehaze !== 0) {
             let dAmt = settings.dehaze / 100;
             let darkFactor = 1 - ((r+g+b)/3 / 255);
@@ -326,12 +338,12 @@ function processPixels(data, width, height) {
             b -= dAmt * 40 * darkFactor; 
         }
 
-        // CRITICAL BUG FIX: Clamp RGB before passing to HSL to prevent mathematical NaNs
+        // CRITICAL FIX: Clamp RGB tightly to prevent math blowing up later
         r = Math.max(0, Math.min(255, r));
         g = Math.max(0, Math.min(255, g));
         b = Math.max(0, Math.min(255, b));
 
-        // 3. HSL & Point Color
+        // HSL & Point Color
         let [h, s, l] = rgbToHsl(r, g, b);
         let hMod = 0, sMod = 0, lMod = 0;
 
@@ -350,19 +362,38 @@ function processPixels(data, width, height) {
                 let strength = 1 - (hueDist / 30);
                 hMod += settings.pointHue * strength;
                 sMod += settings.pointSat * strength;
-                lMod += (settings.pointLum / 100) * strength;
+                lMod += settings.pointLum * strength; // Raw val here, divided below
             }
         }
 
         if (hMod !== 0 || sMod !== 0 || lMod !== 0) {
             h = (h + hMod + 360) % 360;
             s = Math.max(0, Math.min(1, s + (sMod / 100)));
-            l = Math.max(0, Math.min(1, l + lMod));
+            // CRITICAL FIX: divide lMod by 100 so you don't blast the lightness to NaN
+            l = Math.max(0, Math.min(1, l + (lMod / 100))); 
             [r, g, b] = hslToRgb(h, s, l);
         }
 
-        // 4. Tone Curve & Highlights/Shadows
         let luminance = Math.max(0, Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b));
+        
+        // Color Grading safely merged back in
+        if (settings.gradShadS > 0 && luminance < 128) {
+            let weight = (128 - luminance) / 128;
+            let [cR, cG, cB] = getGradingColor(settings.gradShadH, settings.gradShadS, weight);
+            r += cR; g += cG; b += cB;
+        }
+        if (settings.gradMidS > 0) {
+            let weight = 1 - (Math.abs(luminance - 128) / 128);
+            let [cR, cG, cB] = getGradingColor(settings.gradMidH, settings.gradMidS, weight);
+            r += cR; g += cG; b += cB;
+        }
+        if (settings.gradHighS > 0 && luminance >= 128) {
+            let weight = (luminance - 128) / 128;
+            let [cR, cG, cB] = getGradingColor(settings.gradHighH, settings.gradHighS, weight);
+            r += cR; g += cG; b += cB;
+        }
+
+        // Tone Curves
         let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
         let cRatio = cLum / (luminance + 0.001);
         r *= cRatio; g *= cRatio; b *= cRatio;
@@ -377,7 +408,6 @@ function processPixels(data, width, height) {
         r += settings.whites; g += settings.whites; b += settings.whites;
         r -= settings.blacks; g -= settings.blacks; b -= settings.blacks;
 
-        // 5. Texture & Clarity
         if (settings.clarity !== 0 || settings.texture !== 0) {
             let cAmt = settings.clarity / 100;
             let tAmt = settings.texture / 100;
@@ -387,7 +417,6 @@ function processPixels(data, width, height) {
             b += (b - luminance) * (cAmt + (tAmt * 0.5)) * midWeight;
         }
 
-        // 6. Contrast & Vibrance
         let maxRGB = Math.max(r, g, b);
         let avgRGB = (r + g + b) / 3;
         let totalSat = (settings.saturation / 100) + ((settings.vibrance / 100) * (1 - (maxRGB - avgRGB) / 255));
@@ -444,7 +473,11 @@ document.getElementById('download-btn').onclick = () => {
     btn.textContent = '⏳'; 
     setTimeout(() => {
         const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = originalImage.width; exportCanvas.height = originalImage.height;
+        
+        // CRITICAL FIX: floor exports to prevent DOMExceptions
+        exportCanvas.width = Math.floor(originalImage.width); 
+        exportCanvas.height = Math.floor(originalImage.height);
+        
         const eCtx = exportCanvas.getContext('2d');
         eCtx.drawImage(originalImage, 0, 0);
         
@@ -470,5 +503,4 @@ document.getElementById('download-btn').onclick = () => {
     }, 50);
 };
 
-// Start UI with the first panel open
 document.getElementById('panel-presets').classList.add('active');
