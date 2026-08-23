@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preset Batcher</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts for a cute, soft look -->
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+    <!-- JSZip for local batch downloading -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- FileSaver for triggering the download -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>✨ Preset Batcher ✨</h1>
+        <p class="subtitle">Apply your Lightroom DNG settings to multiple photos locally.</p>
+
+        <div class="upload-section">
+            <div class="card dng-card">
+                <h3>1. Upload DNG Preset</h3>
+                <input type="file" id="dng-upload" accept=".dng, image/x-adobe-dng">
+                <label for="dng-upload" class="btn pink-btn">Choose DNG File</label>
+                <p id="dng-status" class="status-text">No preset loaded yet.</p>
+            </div>
+
+            <div class="card photos-card">
+                <h3>2. Upload Photos</h3>
+                <input type="file" id="photo-upload" accept="image/jpeg, image/png" multiple disabled>
+                <label for="photo-upload" class="btn blue-btn" id="photo-label">Choose Target Photos</label>
+                <p id="photo-status" class="status-text">0 photos selected.</p>
+            </div>
+        </div>
+
+        <button id="process-btn" class="btn main-btn" disabled>Batch Process & Download</button>
+        
+        <!-- Hidden canvas for processing -->
+        <canvas id="canvas" style="display: none;"></canvas>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
