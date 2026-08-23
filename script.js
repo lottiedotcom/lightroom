@@ -4,8 +4,9 @@ let originalImage = null;
 const MAX_PREVIEW_SIZE = 800; 
 let previewWidth = 0, previewHeight = 0;
 
+// FIX IMPLEMENTED: Added highlights and shadows to the initialization to prevent NaN errors
 let settings = {
-    exposure: 0, contrast: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
+    exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
     pickedH: -1, pickedS: 0, pickedL: 0, pointHue: 0, pointSat: 0, pointLum: 0,
     redH: 0, redS: 0, redL: 0, orgH: 0, orgS: 0, orgL: 0, yelH: 0, yelS: 0, yelL: 0,
@@ -85,9 +86,11 @@ const numInputs = document.querySelectorAll('.val-input');
 
 function updateUI() {
     sliders.forEach(slider => {
-        slider.value = settings[slider.id];
-        const numInp = document.getElementById(`num-${slider.id}`);
-        if (numInp) numInp.value = settings[slider.id];
+        if (settings[slider.id] !== undefined) {
+            slider.value = settings[slider.id];
+            const numInp = document.getElementById(`num-${slider.id}`);
+            if (numInp) numInp.value = settings[slider.id];
+        }
     });
     requestAnimationFrame(renderPreview);
 }
@@ -198,11 +201,14 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     else if (dynamicRange > 240) settings.contrast = -10;
     else settings.contrast = 5;
 
+    // FIX IMPLEMENTED: Added defaults to ensure these variables are always numbers
     if (p99 > 240) settings.highlights = -25;
     else if (p99 < 200) settings.highlights = 15;
+    else settings.highlights = 0;
 
     if (p1 < 15) settings.shadows = 25;
     else if (p1 > 40) settings.shadows = -10;
+    else settings.shadows = 0;
 
     settings.whites = Math.round(Math.max(-20, Math.min(20, (240 - p99) * 0.3)));
     settings.blacks = Math.round(Math.max(-20, Math.min(20, (p1 - 10) * 0.3)));
