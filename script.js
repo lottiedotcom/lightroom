@@ -4,7 +4,6 @@ let originalImage = null;
 const MAX_PREVIEW_SIZE = 800; 
 let previewWidth = 0, previewHeight = 0;
 
-// The ghost variables (highlights, shadows) are safely initialized here!
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
@@ -62,21 +61,19 @@ tabBtns.forEach(btn => {
         const targetId = btn.dataset.target;
         const targetPanel = document.getElementById(targetId);
 
-        // Feature: If the tab is already active, collapse it to view the photo
         if (btn.classList.contains('active')) {
             btn.classList.remove('active');
             targetPanel.classList.remove('active');
-            mainPanelsContainer.style.display = 'none'; // Completely hide the white container
+            mainPanelsContainer.style.display = 'none';
             return;
         }
 
-        // Open a new tab
         tabBtns.forEach(t => t.classList.remove('active'));
         toolPanels.forEach(p => p.classList.remove('active'));
         
         btn.classList.add('active');
         targetPanel.classList.add('active');
-        mainPanelsContainer.style.display = 'block'; // Bring container back
+        mainPanelsContainer.style.display = 'block';
     });
 });
 
@@ -143,17 +140,18 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
     reader.onload = (event) => {
         originalImage = new Image();
         originalImage.onload = () => {
-            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(originalImage.width, originalImage.height));
+            const width = originalImage.naturalWidth || originalImage.width;
+            const height = originalImage.naturalHeight || originalImage.height;
+            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
             
-            previewWidth = Math.floor(originalImage.width * scale);
-            previewHeight = Math.floor(originalImage.height * scale);
+            previewWidth = Math.floor(width * scale);
+            previewHeight = Math.floor(height * scale);
             
             canvas.style.display = 'block';
             document.getElementById('status').style.display = 'none';
             document.getElementById('download-btn').disabled = false;
             document.getElementById('auto-btn').disabled = false;
             
-            // Delay allows the browser to actually decode the pixel graphics before math runs
             setTimeout(() => {
                 renderPreview();
             }, 50);
@@ -201,7 +199,6 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     else if (dynamicRange > 240) settings.contrast = -10;
     else settings.contrast = 5;
 
-    // Added defaults to ensure these variables are always numbers
     if (p99 > 240) settings.highlights = -25;
     else if (p99 < 200) settings.highlights = 15;
     else settings.highlights = 0;
@@ -225,13 +222,56 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     saveHistory();
 });
 
-// --- Presets ---
+// --- Presets & Batch Processing ---
 document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
 document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
 document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
 document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
 document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
 document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
+
+// --- Batch Process Engine ---
+const batchBtn = document.getElementById('batch-process-btn');
+const batchInput = document.getElementById('batch-file-input');
+
+batchBtn.onclick = () => batchInput.click();
+
+batchInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+
+    batchBtn.disabled = true;
+    batchBtn.textContent = `Processing 0/${files.length}... ⏳`;
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        batchBtn.textContent = `Processing ${i + 1}/${files.length}... ⏳`;
+        
+        await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const processedCanvas = processImageCanvas(img, settings);
+                    const a = document.createElement('a');
+                    const nameParts = file.name.split('.');
+                    const ext = nameParts.pop();
+                    a.download = `${nameParts.join('.')}_edited.jpg`;
+                    a.href = processedCanvas.toDataURL('image/jpeg', 0.95);
+                    a.click();
+                    setTimeout(resolve, 350);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    batchBtn.disabled = false;
+    batchBtn.textContent = '📦 Batch Apply & Export';
+    batchInput.value = '';
+    alert('Batch export complete! ✨');
+});
 
 // --- Point Color Eyedropper ---
 let isPicking = false;
@@ -329,8 +369,8 @@ function getGradingColor(hue, sat, luminanceWeight) {
 }
 
 // --- Main Processing Engine ---
-function processPixels(data, width, height) {
-    const factor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
+function processPixels(data, width, height, currentSettings = settings) {
+    const factor = (259 * (currentSettings.contrast + 255)) / (255 * (259 - currentSettings.contrast));
     const cx = width / 2; const cy = height / 2;
     const maxDist = Math.sqrt(cx*cx + cy*cy);
 
@@ -338,14 +378,13 @@ function processPixels(data, width, height) {
         let r = data[i], g = data[i + 1], b = data[i + 2];
         let x = (i / 4) % width, y = Math.floor((i / 4) / width);
 
-        let exp = 1 + (settings.exposure / 100);
+        let exp = 1 + (currentSettings.exposure / 100);
         r *= exp; g *= exp; b *= exp;
-        r += settings.temp * 0.5; b -= settings.temp * 0.5;
-        g += settings.tint * 0.5;
+        r += currentSettings.temp * 0.5; b -= currentSettings.temp * 0.5;
+        g += currentSettings.tint * 0.5;
 
-        // Dehaze is still here!
-        if (settings.dehaze !== 0) {
-            let dAmt = settings.dehaze / 100;
+        if (currentSettings.dehaze !== 0) {
+            let dAmt = currentSettings.dehaze / 100;
             let darkFactor = 1 - ((r+g+b)/3 / 255);
             r -= dAmt * 20 * darkFactor; 
             g -= dAmt * 25 * darkFactor; 
@@ -359,22 +398,22 @@ function processPixels(data, width, height) {
         let [h, s, l] = rgbToHsl(r, g, b);
         let hMod = 0, sMod = 0, lMod = 0;
 
-        if (h > 345 || h <= 15) { hMod=settings.redH; sMod=settings.redS; lMod=settings.redL; }
-        else if (h > 15 && h <= 45) { hMod=settings.orgH; sMod=settings.orgS; lMod=settings.orgL; }
-        else if (h > 45 && h <= 75) { hMod=settings.yelH; sMod=settings.yelS; lMod=settings.yelL; }
-        else if (h > 75 && h <= 150) { hMod=settings.grnH; sMod=settings.grnS; lMod=settings.grnL; }
-        else if (h > 150 && h <= 200) { hMod=settings.aquH; sMod=settings.aquS; lMod=settings.aquL; }
-        else if (h > 200 && h <= 260) { hMod=settings.bluH; sMod=settings.bluS; lMod=settings.bluL; }
-        else if (h > 260 && h <= 290) { hMod=settings.purH; sMod=settings.purS; lMod=settings.purL; }
-        else if (h > 290 && h <= 345) { hMod=settings.magH; sMod=settings.magS; lMod=settings.magL; }
+        if (h > 345 || h <= 15) { hMod=currentSettings.redH; sMod=currentSettings.redS; lMod=currentSettings.redL; }
+        else if (h > 15 && h <= 45) { hMod=currentSettings.orgH; sMod=currentSettings.orgS; lMod=currentSettings.orgL; }
+        else if (h > 45 && h <= 75) { hMod=currentSettings.yelH; sMod=currentSettings.yelS; lMod=currentSettings.yelL; }
+        else if (h > 75 && h <= 150) { hMod=currentSettings.grnH; sMod=currentSettings.grnS; lMod=currentSettings.grnL; }
+        else if (h > 150 && h <= 200) { hMod=currentSettings.aquH; sMod=currentSettings.aquS; lMod=currentSettings.aquL; }
+        else if (h > 200 && h <= 260) { hMod=currentSettings.bluH; sMod=currentSettings.bluS; lMod=currentSettings.bluL; }
+        else if (h > 260 && h <= 290) { hMod=currentSettings.purH; sMod=currentSettings.purS; lMod=currentSettings.purL; }
+        else if (h > 290 && h <= 345) { hMod=currentSettings.magH; sMod=currentSettings.magS; lMod=currentSettings.magL; }
 
-        if (settings.pickedH !== -1) {
-            let hueDist = Math.min(Math.abs(h - settings.pickedH), 360 - Math.abs(h - settings.pickedH));
+        if (currentSettings.pickedH !== -1) {
+            let hueDist = Math.min(Math.abs(h - currentSettings.pickedH), 360 - Math.abs(h - currentSettings.pickedH));
             if (hueDist < 30) {
                 let strength = 1 - (hueDist / 30);
-                hMod += settings.pointHue * strength;
-                sMod += settings.pointSat * strength;
-                lMod += settings.pointLum * strength; 
+                hMod += currentSettings.pointHue * strength;
+                sMod += currentSettings.pointSat * strength;
+                lMod += currentSettings.pointLum * strength; 
             }
         }
 
@@ -387,39 +426,39 @@ function processPixels(data, width, height) {
 
         let luminance = Math.max(0, Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b));
         
-        if (settings.gradShadS > 0 && luminance < 128) {
+        if (currentSettings.gradShadS > 0 && luminance < 128) {
             let weight = (128 - luminance) / 128;
-            let [cR, cG, cB] = getGradingColor(settings.gradShadH, settings.gradShadS, weight);
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradShadH, currentSettings.gradShadS, weight);
             r += cR; g += cG; b += cB;
         }
-        if (settings.gradMidS > 0) {
+        if (currentSettings.gradMidS > 0) {
             let weight = 1 - (Math.abs(luminance - 128) / 128);
-            let [cR, cG, cB] = getGradingColor(settings.gradMidH, settings.gradMidS, weight);
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradMidH, currentSettings.gradMidS, weight);
             r += cR; g += cG; b += cB;
         }
-        if (settings.gradHighS > 0 && luminance >= 128) {
+        if (currentSettings.gradHighS > 0 && luminance >= 128) {
             let weight = (luminance - 128) / 128;
-            let [cR, cG, cB] = getGradingColor(settings.gradHighH, settings.gradHighS, weight);
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradHighH, currentSettings.gradHighS, weight);
             r += cR; g += cG; b += cB;
         }
 
-        let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
+        let cLum = applyCurve(luminance, currentSettings.curveHigh, currentSettings.curveLight, currentSettings.curveDark, currentSettings.curveShadow);
         let cRatio = (luminance <= 0) ? 0 : (cLum / luminance);
         r *= cRatio; g *= cRatio; b *= cRatio;
 
         if (luminance > 128) {
             let highMod = (luminance - 128) / 128;
-            r += settings.highlights * highMod; g += settings.highlights * highMod; b += settings.highlights * highMod;
+            r += currentSettings.highlights * highMod; g += currentSettings.highlights * highMod; b += currentSettings.highlights * highMod;
         } else {
             let shadMod = (128 - luminance) / 128;
-            r += settings.shadows * shadMod; g += settings.shadows * shadMod; b += settings.shadows * shadMod;
+            r += currentSettings.shadows * shadMod; g += currentSettings.shadows * shadMod; b += currentSettings.shadows * shadMod;
         }
-        r += settings.whites; g += settings.whites; b += settings.whites;
-        r -= settings.blacks; g -= settings.blacks; b -= settings.blacks;
+        r += currentSettings.whites; g += currentSettings.whites; b += currentSettings.whites;
+        r -= currentSettings.blacks; g -= currentSettings.blacks; b -= currentSettings.blacks;
 
-        if (settings.clarity !== 0 || settings.texture !== 0) {
-            let cAmt = settings.clarity / 100;
-            let tAmt = settings.texture / 100;
+        if (currentSettings.clarity !== 0 || currentSettings.texture !== 0) {
+            let cAmt = currentSettings.clarity / 100;
+            let tAmt = currentSettings.texture / 100;
             let midWeight = 1 - (Math.abs(luminance - 128) / 128); 
             r += (r - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
             g += (g - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
@@ -428,22 +467,20 @@ function processPixels(data, width, height) {
 
         let maxRGB = Math.max(r, g, b);
         let avgRGB = (r + g + b) / 3;
-        let totalSat = (settings.saturation / 100) + ((settings.vibrance / 100) * (1 - (maxRGB - avgRGB) / 255));
+        let totalSat = (currentSettings.saturation / 100) + ((currentSettings.vibrance / 100) * (1 - (maxRGB - avgRGB) / 255));
         r += (r - avgRGB) * totalSat; g += (g - avgRGB) * totalSat; b += (b - avgRGB) * totalSat;
 
         r = factor * (r - 128) + 128; g = factor * (g - 128) + 128; b = factor * (b - 128) + 128;
 
-        // Vignette is still here!
-        if (settings.vignette !== 0) {
+        if (currentSettings.vignette !== 0) {
             let dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
-            let vigAmt = (settings.vignette / 100); 
+            let vigAmt = (currentSettings.vignette / 100); 
             let vigMod = 1 + (vigAmt * Math.pow(dist / maxDist, 2)); 
             r *= vigMod; g *= vigMod; b *= vigMod;
         }
 
-        // Grain is still here!
-        if (settings.grain > 0) {
-            let noise = (Math.random() - 0.5) * settings.grain;
+        if (currentSettings.grain > 0) {
+            let noise = (Math.random() - 0.5) * currentSettings.grain;
             r += noise; g += noise; b += noise;
         }
 
@@ -471,22 +508,57 @@ function applySharpen(ctx, w, h, amount) {
     ctx.putImageData(imgData, 0, 0);
 }
 
+// --- Unified Render Processor (Preview & High-Res Export) ---
+function processImageCanvas(img, currentSettings) {
+    const fullCanvas = document.createElement('canvas');
+    const width = img.naturalWidth || img.width;
+    const height = img.naturalHeight || img.height;
+    fullCanvas.width = width;
+    fullCanvas.height = height;
+    
+    const eCtx = fullCanvas.getContext('2d');
+    eCtx.drawImage(img, 0, 0, width, height);
+
+    // Dynamic blur radius calibrated to resolution
+    if (currentSettings.blur > 0 || currentSettings.noiseRed > 0) {
+        const previewScale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
+        const scaleRatio = 1 / previewScale;
+        const baseRad = currentSettings.blur > 0 ? 4 : (currentSettings.noiseRed / 20);
+        const bRad = Math.max(1, baseRad * scaleRatio);
+
+        eCtx.globalAlpha = currentSettings.blur > 0 ? (currentSettings.blur / 250) : (currentSettings.noiseRed / 100);
+        eCtx.filter = `blur(${bRad}px)`;
+        eCtx.drawImage(img, 0, 0, width, height);
+        eCtx.filter = 'none';
+        eCtx.globalAlpha = 1.0;
+    }
+
+    const imgData = eCtx.getImageData(0, 0, width, height);
+    processPixels(imgData.data, width, height, currentSettings);
+    eCtx.putImageData(imgData, 0, 0);
+
+    if (currentSettings.sharpen > 0) {
+        applySharpen(eCtx, width, height, currentSettings.sharpen);
+    }
+
+    return fullCanvas;
+}
+
 function renderPreview() {
     if (!originalImage) return;
     canvas.width = previewWidth; canvas.height = previewHeight;
     ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
-    // Your custom soft skin blur overlay is still fully active right here!
     if (settings.blur > 0 || settings.noiseRed > 0) {
         let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
-        ctx.globalAlpha = settings.blur > 0 ? (settings.blur/250) : (settings.noiseRed/100); 
+        ctx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100); 
         ctx.filter = `blur(${bRad}px)`;
         ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
         ctx.filter = 'none'; ctx.globalAlpha = 1.0; 
     }
 
     const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
-    processPixels(imgData.data, previewWidth, previewHeight);
+    processPixels(imgData.data, previewWidth, previewHeight, settings);
     ctx.putImageData(imgData, 0, 0);
     applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
 }
@@ -496,28 +568,7 @@ document.getElementById('download-btn').onclick = () => {
     const btn = document.getElementById('download-btn');
     btn.textContent = '⏳'; 
     setTimeout(() => {
-        const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = Math.floor(originalImage.width); 
-        exportCanvas.height = Math.floor(originalImage.height);
-        
-        const eCtx = exportCanvas.getContext('2d');
-        eCtx.drawImage(originalImage, 0, 0);
-        
-        // Soft skin blur applied dynamically to high-res exports!
-        if (settings.blur > 0 || settings.noiseRed > 0) {
-            eCtx.globalAlpha = settings.blur > 0 ? (settings.blur/250) : (settings.noiseRed/100); 
-            let baseRad = settings.blur > 0 ? 4 : 2;
-            const bRad = Math.max(baseRad, (originalImage.width / 1000) * (baseRad/2)); 
-            eCtx.filter = `blur(${bRad}px)`;
-            eCtx.drawImage(originalImage, 0, 0);
-            eCtx.filter = 'none'; eCtx.globalAlpha = 1.0;
-        }
-
-        const imgData = eCtx.getImageData(0, 0, exportCanvas.width, exportCanvas.height);
-        processPixels(imgData.data, exportCanvas.width, exportCanvas.height);
-        eCtx.putImageData(imgData, 0, 0);
-        applySharpen(eCtx, exportCanvas.width, exportCanvas.height, settings.sharpen);
-
+        const exportCanvas = processImageCanvas(originalImage, settings);
         const a = document.createElement('a');
         a.download = 'raw_edited.jpg';
         a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
