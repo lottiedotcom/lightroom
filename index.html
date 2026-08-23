@@ -1,105 +1,168 @@
-:root {
-    --bg-main: #fff0f5; 
-    --panel-bg: #ffffff;
-    --text-color: #5c4d5c; 
-    --text-light: #998a99;
-    --pink-accent: #ffb6c1;
-    --pink-hover: #ff9eb0;
-    --blue-accent: #bfe6ff;
-    --blue-hover: #a8dfff;
-    --border-radius: 16px;
-    --nav-height: 70px;
-}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Plum's RAW Editor</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <header class="top-bar">
+            <h2>✨ Editor ✨</h2>
+            <button id="download-btn" class="icon-btn" disabled>💾</button>
+        </header>
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+        <main class="preview-area" id="preview-container">
+            <canvas id="canvas"></canvas>
+            <div id="status">
+                <p>Upload an image to start 🎀</p>
+                <button id="upload-btn" class="btn blue-btn">Choose Photo</button>
+                <input type="file" id="file-upload" accept="image/*" hidden>
+            </div>
+            <!-- Target overlay for Point Color -->
+            <div id="picker-target" style="display: none;">🎯</div>
+        </main>
 
-body {
-    font-family: 'Quicksand', sans-serif;
-    background-color: var(--bg-main);
-    color: var(--text-color);
-    position: fixed; 
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden; 
-    overscroll-behavior: none; 
-}
+        <div class="panels-container">
+            
+            <!-- File Panel -->
+            <div id="panel-presets" class="tool-panel">
+                <div class="panel-header">File & Presets</div>
+                <div class="button-grid">
+                    <button id="copy-preset" class="btn pink-btn">Copy</button>
+                    <button id="paste-preset" class="btn pink-btn">Paste</button>
+                    <button id="save-preset" class="btn pink-btn">Save</button>
+                    <button id="load-preset-btn" class="btn pink-btn">Load</button>
+                    <input type="file" id="load-preset" accept=".json" hidden>
+                </div>
+            </div>
 
-.app-container { display: flex; flex-direction: column; height: 100%; }
+            <!-- Light & Curve -->
+            <div id="panel-light" class="tool-panel">
+                <div class="panel-header">Light & Tone Curve</div>
+                <div class="slider-group"><div class="slider-label"><span>Exposure</span><span class="val" id="val-exposure">0</span></div><input type="range" id="exposure" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Contrast</span><span class="val" id="val-contrast">0</span></div><input type="range" id="contrast" min="-100" max="100" value="0"></div>
+                
+                <h4 style="margin-top: 1rem; color: #ff9eb0;">Parametric Curve</h4>
+                <div class="slider-group"><div class="slider-label"><span>Highlights</span><span class="val" id="val-curveHigh">0</span></div><input type="range" id="curveHigh" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lights</span><span class="val" id="val-curveLight">0</span></div><input type="range" id="curveLight" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Darks</span><span class="val" id="val-curveDark">0</span></div><input type="range" id="curveDark" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Shadows</span><span class="val" id="val-curveShadow">0</span></div><input type="range" id="curveShadow" min="-100" max="100" value="0"></div>
+                
+                <h4 style="margin-top: 1rem; color: #ff9eb0;">Clipping</h4>
+                <div class="slider-group"><div class="slider-label"><span>Whites</span><span class="val" id="val-whites">0</span></div><input type="range" id="whites" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Blacks</span><span class="val" id="val-blacks">0</span></div><input type="range" id="blacks" min="-100" max="100" value="0"></div>
+            </div>
 
-.top-bar {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 1rem 1.5rem; background-color: var(--panel-bg);
-    box-shadow: 0 2px 10px rgba(255, 182, 193, 0.2); z-index: 10;
-}
+            <!-- Color (Temp/Tint) -->
+            <div id="panel-color" class="tool-panel">
+                <div class="panel-header">Global Color</div>
+                <div class="slider-group"><div class="slider-label"><span>Temperature</span><span class="val" id="val-temp">0</span></div><input type="range" id="temp" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Tint</span><span class="val" id="val-tint">0</span></div><input type="range" id="tint" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Vibrance</span><span class="val" id="val-vibrance">0</span></div><input type="range" id="vibrance" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Saturation</span><span class="val" id="val-saturation">0</span></div><input type="range" id="saturation" min="-100" max="100" value="0"></div>
+            </div>
 
-.top-bar h2 { font-size: 1.2rem; color: var(--pink-hover); }
+            <!-- Point Color & 8-Channel HSL -->
+            <div id="panel-hsl" class="tool-panel">
+                <div class="panel-header">Mixer & Point Color</div>
+                
+                <div style="background: #fff0f5; padding: 1rem; border-radius: 12px; margin-bottom: 1.5rem;">
+                    <h4 style="margin-top:0;">Point Color</h4>
+                    <button id="picker-btn" class="btn blue-btn" style="margin-bottom: 1rem;">Activate Eyedropper 💉</button>
+                    <div id="picked-color-display" style="width: 100%; height: 20px; border-radius: 4px; background: #ccc; margin-bottom: 1rem;"></div>
+                    <div class="slider-group"><div class="slider-label"><span>Shift Hue</span><span class="val" id="val-pointHue">0</span></div><input type="range" id="pointHue" min="-180" max="180" value="0"></div>
+                    <div class="slider-group"><div class="slider-label"><span>Shift Saturation</span><span class="val" id="val-pointSat">0</span></div><input type="range" id="pointSat" min="-100" max="100" value="0"></div>
+                    <div class="slider-group"><div class="slider-label"><span>Shift Luminance</span><span class="val" id="val-pointLum">0</span></div><input type="range" id="pointLum" min="-100" max="100" value="0"></div>
+                </div>
 
-.icon-btn { background: none; border: none; font-size: 1.5rem; cursor: pointer; opacity: 1; transition: 0.2s; }
-.icon-btn:disabled { opacity: 0.3; }
+                <h4 style="color: #ff6b6b;">Red</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="redH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="redS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="redL" min="-100" max="100" value="0"></div>
 
-.preview-area {
-    flex: 1; display: flex; justify-content: center;
-    align-items: center; padding: 1rem; position: relative; overflow: hidden;
-}
+                <h4 style="color: #ffa502;">Orange</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="orgH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="orgS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="orgL" min="-100" max="100" value="0"></div>
 
-canvas {
-    max-width: 100%; max-height: 100%; object-fit: contain;
-    border-radius: 8px; box-shadow: 0 5px 20px rgba(92, 77, 92, 0.1); display: none;
-}
+                <h4 style="color: #eccc68;">Yellow</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="yelH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="yelS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="yelL" min="-100" max="100" value="0"></div>
 
-#status { text-align: center; display: flex; flex-direction: column; gap: 1rem; align-items: center; }
-#status p { font-weight: 700; color: var(--text-light); }
+                <h4 style="color: #2ed573;">Green</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="grnH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="grnS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="grnL" min="-100" max="100" value="0"></div>
 
-.panels-container {
-    position: relative; background-color: var(--panel-bg);
-    border-top-left-radius: 24px; border-top-right-radius: 24px;
-    box-shadow: 0 -4px 20px rgba(255, 182, 193, 0.3); z-index: 10;
-}
+                <h4 style="color: #7bed9f;">Aqua</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="aquH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="aquS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="aquL" min="-100" max="100" value="0"></div>
 
-.tool-panel {
-    display: none; padding: 1.5rem; padding-bottom: calc(1.5rem + var(--nav-height));
-    max-height: 50vh; overflow-y: auto; -webkit-overflow-scrolling: touch; 
-}
+                <h4 style="color: #1e90ff;">Blue</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="bluH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="bluS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="bluL" min="-100" max="100" value="0"></div>
 
-.tool-panel.active { display: block; }
+                <h4 style="color: #9c88ff;">Purple</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="purH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="purS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="purL" min="-100" max="100" value="0"></div>
 
-.panel-header {
-    text-align: center; font-weight: 700; margin-bottom: 1.5rem;
-    color: var(--text-color); border-bottom: 2px dashed var(--pink-accent); padding-bottom: 0.5rem;
-}
+                <h4 style="color: #ff4757;">Magenta</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="magH" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="magS" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Lum</span></div><input type="range" id="magL" min="-100" max="100" value="0"></div>
+            </div>
 
-h4 { font-size: 0.95rem; }
+            <!-- Color Grading -->
+            <div id="panel-grading" class="tool-panel">
+                <div class="panel-header">Color Grading</div>
+                <h4>Shadows</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="gradShadH" min="0" max="360" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="gradShadS" min="0" max="100" value="0"></div>
+                <h4>Midtones</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="gradMidH" min="0" max="360" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="gradMidS" min="0" max="100" value="0"></div>
+                <h4>Highlights</h4>
+                <div class="slider-group"><div class="slider-label"><span>Hue</span></div><input type="range" id="gradHighH" min="0" max="360" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Sat</span></div><input type="range" id="gradHighS" min="0" max="100" value="0"></div>
+            </div>
 
-.slider-group { margin-bottom: 1.5rem; }
-.slider-label { display: flex; justify-content: space-between; font-size: 0.9rem; font-weight: 700; margin-bottom: 0.5rem; }
-.slider-label .val { color: var(--text-light); }
+            <!-- Presence & Effects -->
+            <div id="panel-effects" class="tool-panel">
+                <div class="panel-header">Presence & Effects</div>
+                <div class="slider-group"><div class="slider-label"><span>Texture (Micro-contrast)</span><span class="val" id="val-texture">0</span></div><input type="range" id="texture" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Clarity (Midtone contrast)</span><span class="val" id="val-clarity">0</span></div><input type="range" id="clarity" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Dehaze</span><span class="val" id="val-dehaze">0</span></div><input type="range" id="dehaze" min="-100" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Skin Blur</span><span class="val" id="val-blur">0</span></div><input type="range" id="blur" min="0" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Vignette</span><span class="val" id="val-vignette">0</span></div><input type="range" id="vignette" min="-100" max="100" value="0"></div>
+            </div>
 
-input[type="range"] {
-    width: 100%; appearance: none; height: 4px; background: #e0e0e0; border-radius: 2px; outline: none;
-}
-input[type="range"]::-webkit-slider-thumb {
-    appearance: none; width: 20px; height: 20px; border-radius: 50%;
-    background: var(--blue-hover); cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-}
+            <!-- Detail -->
+            <div id="panel-detail" class="tool-panel">
+                <div class="panel-header">Detail</div>
+                <div class="slider-group"><div class="slider-label"><span>Sharpen Amount</span><span class="val" id="val-sharpen">0</span></div><input type="range" id="sharpen" min="0" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Noise Reduction (Slow!)</span><span class="val" id="val-noiseRed">0</span></div><input type="range" id="noiseRed" min="0" max="100" value="0"></div>
+                <div class="slider-group"><div class="slider-label"><span>Grain Amount</span><span class="val" id="val-grain">0</span></div><input type="range" id="grain" min="0" max="100" value="0"></div>
+            </div>
+            
+        </div>
 
-.btn {
-    padding: 0.8rem 1.2rem; border-radius: 12px; font-weight: 700;
-    cursor: pointer; border: none; color: var(--text-color); width: 100%;
-}
-.blue-btn { background-color: var(--blue-accent); }
-.pink-btn { background-color: var(--pink-accent); }
-.main-btn { background-color: transparent; border: 2px solid var(--pink-accent); margin-top: 1rem; }
-
-.button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
-
-.bottom-nav {
-    position: fixed; bottom: 0; left: 0; width: 100%; height: var(--nav-height);
-    background-color: var(--panel-bg); display: flex; align-items: center; border-top: 1px solid #f0f0f0; z-index: 20;
-    overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; padding: 0 1rem; gap: 1.5rem;
-}
-
-.tab-btn {
-    background: none; border: none; font-family: inherit; font-size: 0.75rem; font-weight: 700; color: var(--text-light);
-    cursor: pointer; padding: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; flex-shrink: 0; 
-}
-.tab-btn.active { color: var(--blue-hover); }
+        <nav class="bottom-nav">
+            <button class="tab-btn active" data-target="panel-presets">📁<br>File</button>
+            <button class="tab-btn" data-target="panel-light">☀️<br>Light</button>
+            <button class="tab-btn" data-target="panel-color">🌡️<br>Color</button>
+            <button class="tab-btn" data-target="panel-hsl">🎯<br>Mixer</button>
+            <button class="tab-btn" data-target="panel-grading">🌗<br>Grade</button>
+            <button class="tab-btn" data-target="panel-effects">✨<br>Presence</button>
+            <button class="tab-btn" data-target="panel-detail">🔍<br>Detail</button>
+        </nav>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
