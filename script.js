@@ -4,7 +4,7 @@ let originalImage = null;
 const MAX_PREVIEW_SIZE = 800; 
 let previewWidth = 0, previewHeight = 0;
 
-// FIX IMPLEMENTED: Added highlights and shadows to the initialization to prevent NaN errors
+// The ghost variables (highlights, shadows) are safely initialized here!
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
@@ -153,7 +153,7 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
             document.getElementById('download-btn').disabled = false;
             document.getElementById('auto-btn').disabled = false;
             
-            // CRITICAL FIX: Delay allows the browser to actually decode the pixel graphics before math runs
+            // Delay allows the browser to actually decode the pixel graphics before math runs
             setTimeout(() => {
                 renderPreview();
             }, 50);
@@ -201,7 +201,7 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     else if (dynamicRange > 240) settings.contrast = -10;
     else settings.contrast = 5;
 
-    // FIX IMPLEMENTED: Added defaults to ensure these variables are always numbers
+    // Added defaults to ensure these variables are always numbers
     if (p99 > 240) settings.highlights = -25;
     else if (p99 < 200) settings.highlights = 15;
     else settings.highlights = 0;
@@ -343,6 +343,7 @@ function processPixels(data, width, height) {
         r += settings.temp * 0.5; b -= settings.temp * 0.5;
         g += settings.tint * 0.5;
 
+        // Dehaze is still here!
         if (settings.dehaze !== 0) {
             let dAmt = settings.dehaze / 100;
             let darkFactor = 1 - ((r+g+b)/3 / 255);
@@ -402,7 +403,6 @@ function processPixels(data, width, height) {
             r += cR; g += cG; b += cB;
         }
 
-        // CRITICAL FIX: Safe Tone Curve Math
         let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
         let cRatio = (luminance <= 0) ? 0 : (cLum / luminance);
         r *= cRatio; g *= cRatio; b *= cRatio;
@@ -433,7 +433,7 @@ function processPixels(data, width, height) {
 
         r = factor * (r - 128) + 128; g = factor * (g - 128) + 128; b = factor * (b - 128) + 128;
 
-        // Added Vignette Back
+        // Vignette is still here!
         if (settings.vignette !== 0) {
             let dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
             let vigAmt = (settings.vignette / 100); 
@@ -441,7 +441,7 @@ function processPixels(data, width, height) {
             r *= vigMod; g *= vigMod; b *= vigMod;
         }
 
-        // Added Grain Back
+        // Grain is still here!
         if (settings.grain > 0) {
             let noise = (Math.random() - 0.5) * settings.grain;
             r += noise; g += noise; b += noise;
@@ -476,6 +476,7 @@ function renderPreview() {
     canvas.width = previewWidth; canvas.height = previewHeight;
     ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
+    // Your custom soft skin blur overlay is still fully active right here!
     if (settings.blur > 0 || settings.noiseRed > 0) {
         let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
         ctx.globalAlpha = settings.blur > 0 ? (settings.blur/250) : (settings.noiseRed/100); 
@@ -502,6 +503,7 @@ document.getElementById('download-btn').onclick = () => {
         const eCtx = exportCanvas.getContext('2d');
         eCtx.drawImage(originalImage, 0, 0);
         
+        // Soft skin blur applied dynamically to high-res exports!
         if (settings.blur > 0 || settings.noiseRed > 0) {
             eCtx.globalAlpha = settings.blur > 0 ? (settings.blur/250) : (settings.noiseRed/100); 
             let baseRad = settings.blur > 0 ? 4 : 2;
