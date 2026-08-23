@@ -2,66 +2,123 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plum's Photo Editor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Plum's Mobile Editor</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar Controls -->
-        <aside class="sidebar">
+        
+        <!-- Header -->
+        <header class="top-bar">
             <h2>✨ Editor ✨</h2>
-            
-            <div class="control-group">
-                <button id="upload-btn" class="btn blue-btn">Upload Photo</button>
-                <input type="file" id="file-upload" accept="image/*" hidden>
-                <button id="download-btn" class="btn blue-btn">Download Image</button>
-            </div>
-
-            <div class="control-group preset-group">
-                <h3>Presets</h3>
-                <div class="preset-buttons">
-                    <button id="copy-preset" class="btn pink-btn small">Copy</button>
-                    <button id="paste-preset" class="btn pink-btn small">Paste</button>
-                    <button id="save-preset" class="btn pink-btn small">Save</button>
-                    <button id="load-preset-btn" class="btn pink-btn small">Load</button>
-                    <input type="file" id="load-preset" accept=".json" hidden>
-                </div>
-            </div>
-
-            <div class="sliders-container">
-                <!-- Light -->
-                <h3>Light</h3>
-                <label>Exposure <input type="range" id="exposure" min="-100" max="100" value="0"></label>
-                <label>Contrast <input type="range" id="contrast" min="-100" max="100" value="0"></label>
-                <label>Highlights <input type="range" id="highlights" min="-100" max="100" value="0"></label>
-                <label>Shadows <input type="range" id="shadows" min="-100" max="100" value="0"></label>
-                <label>Whites <input type="range" id="whites" min="-100" max="100" value="0"></label>
-                <label>Blacks <input type="range" id="blacks" min="-100" max="100" value="0"></label>
-
-                <!-- Color -->
-                <h3>Color</h3>
-                <label>Temperature <input type="range" id="temp" min="-100" max="100" value="0"></label>
-                <label>Tint <input type="range" id="tint" min="-100" max="100" value="0"></label>
-                <label>Vibrance <input type="range" id="vibrance" min="-100" max="100" value="0"></label>
-                <label>Saturation <input type="range" id="saturation" min="-100" max="100" value="0"></label>
-
-                <!-- Effects -->
-                <h3>Effects</h3>
-                <label>Blur <input type="range" id="blur" min="0" max="50" value="0"></label>
-                <label>Clarity <input type="range" id="clarity" min="-100" max="100" value="0"></label>
-                <label>Grain <input type="range" id="grain" min="0" max="100" value="0"></label>
-                
-                <button id="reset-btn" class="btn main-btn">Reset All</button>
-            </div>
-        </aside>
+            <button id="download-btn" class="icon-btn" disabled>💾</button>
+        </header>
 
         <!-- Main Preview Area -->
         <main class="preview-area">
             <canvas id="canvas"></canvas>
-            <p id="status">Upload an image to start editing 🎀</p>
+            <div id="status">
+                <p>Upload an image to start 🎀</p>
+                <button id="upload-btn" class="btn blue-btn">Choose Photo</button>
+                <input type="file" id="file-upload" accept="image/*" hidden>
+            </div>
         </main>
+
+        <!-- Sliders & Tools Panels (Hidden by default) -->
+        <div class="panels-container">
+            
+            <!-- File & Presets Panel -->
+            <div id="panel-presets" class="tool-panel">
+                <div class="panel-header">Presets & Tools</div>
+                <div class="button-grid">
+                    <button id="copy-preset" class="btn pink-btn">Copy Preset</button>
+                    <button id="paste-preset" class="btn pink-btn">Paste Preset</button>
+                    <button id="save-preset" class="btn pink-btn">Save to JSON</button>
+                    <button id="load-preset-btn" class="btn pink-btn">Load JSON</button>
+                    <input type="file" id="load-preset" accept=".json" hidden>
+                </div>
+                <button id="reset-btn" class="btn main-btn">Reset Image All</button>
+            </div>
+
+            <!-- Light Panel -->
+            <div id="panel-light" class="tool-panel">
+                <div class="panel-header">Light</div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Exposure</span><span class="val" id="val-exposure">0</span></div>
+                    <input type="range" id="exposure" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Contrast</span><span class="val" id="val-contrast">0</span></div>
+                    <input type="range" id="contrast" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Highlights</span><span class="val" id="val-highlights">0</span></div>
+                    <input type="range" id="highlights" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Shadows</span><span class="val" id="val-shadows">0</span></div>
+                    <input type="range" id="shadows" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Whites</span><span class="val" id="val-whites">0</span></div>
+                    <input type="range" id="whites" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Blacks</span><span class="val" id="val-blacks">0</span></div>
+                    <input type="range" id="blacks" min="-100" max="100" value="0">
+                </div>
+            </div>
+
+            <!-- Color Panel -->
+            <div id="panel-color" class="tool-panel">
+                <div class="panel-header">Color</div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Temperature</span><span class="val" id="val-temp">0</span></div>
+                    <input type="range" id="temp" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Tint</span><span class="val" id="val-tint">0</span></div>
+                    <input type="range" id="tint" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Vibrance</span><span class="val" id="val-vibrance">0</span></div>
+                    <input type="range" id="vibrance" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Saturation</span><span class="val" id="val-saturation">0</span></div>
+                    <input type="range" id="saturation" min="-100" max="100" value="0">
+                </div>
+            </div>
+
+            <!-- Effects Panel -->
+            <div id="panel-effects" class="tool-panel">
+                <div class="panel-header">Effects</div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Blur</span><span class="val" id="val-blur">0</span></div>
+                    <input type="range" id="blur" min="0" max="50" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Clarity</span><span class="val" id="val-clarity">0</span></div>
+                    <input type="range" id="clarity" min="-100" max="100" value="0">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Grain</span><span class="val" id="val-grain">0</span></div>
+                    <input type="range" id="grain" min="0" max="100" value="0">
+                </div>
+            </div>
+            
+        </div>
+
+        <!-- Bottom Navigation Bar -->
+        <nav class="bottom-nav">
+            <button class="tab-btn active" data-target="panel-presets">📁<br>Presets</button>
+            <button class="tab-btn" data-target="panel-light">☀️<br>Light</button>
+            <button class="tab-btn" data-target="panel-color">🌡️<br>Color</button>
+            <button class="tab-btn" data-target="panel-effects">✨<br>Effects</button>
+        </nav>
+
     </div>
 
     <script src="script.js"></script>
