@@ -2,6 +2,11 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 let originalImage = null;
 
+// Settings for optimization
+const MAX_PREVIEW_SIZE = 800; 
+let previewWidth = 0;
+let previewHeight = 0;
+
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
@@ -14,11 +19,9 @@ const toolPanels = document.querySelectorAll('.tool-panel');
 
 tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
-        // Remove active class from all tabs and panels
         tabBtns.forEach(t => t.classList.remove('active'));
         toolPanels.forEach(p => p.classList.remove('active'));
         
-        // Add active class to clicked tab and corresponding panel
         btn.classList.add('active');
         document.getElementById(btn.dataset.target).classList.add('active');
     });
@@ -30,21 +33,21 @@ const sliders = document.querySelectorAll('input[type="range"]');
 function updateUI() {
     sliders.forEach(slider => {
         slider.value = settings[slider.id];
-        // Update the number text next to the slider label
         document.getElementById(`val-${slider.id}`).textContent = settings[slider.id];
     });
-    renderImage();
+    requestAnimationFrame(renderPreview);
 }
 
 sliders.forEach(slider => {
     slider.addEventListener('input', (e) => {
         settings[e.target.id] = parseFloat(e.target.value);
         document.getElementById(`val-${e.target.id}`).textContent = e.target.value;
-        requestAnimationFrame(renderImage);
+        // requestAnimationFrame keeps the rendering synced with the screen refresh rate
+        requestAnimationFrame(renderPreview); 
     });
 });
 
-// --- Upload / Download Logic ---
+// --- Upload Logic ---
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
 
@@ -56,23 +59,21 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
     reader.onload = (event) => {
         originalImage = new Image();
         originalImage.onload = () => {
+            // Calculate a fast preview size
+            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(originalImage.width, originalImage.height));
+            previewWidth = originalImage.width * scale;
+            previewHeight = originalImage.height * scale;
+
             canvas.style.display = 'block';
             document.getElementById('status').style.display = 'none';
             document.getElementById('download-btn').disabled = false;
-            renderImage();
+            
+            renderPreview();
         };
         originalImage.src = event.target.result;
     };
     reader.readAsDataURL(file);
 });
-
-document.getElementById('download-btn').onclick = () => {
-    if (!originalImage) return;
-    const a = document.createElement('a');
-    a.download = 'edited_photo.jpg';
-    a.href = canvas.toDataURL('image/jpeg', 0.95);
-    a.click();
-};
 
 // --- Preset Management ---
 document.getElementById('copy-preset').onclick = () => {
@@ -115,20 +116,8 @@ document.getElementById('reset-btn').onclick = () => {
     updateUI();
 };
 
-// --- Image Rendering Engine (Pixel Math) ---
-function renderImage() {
-    if (!originalImage) return;
-
-    canvas.width = originalImage.width;
-    canvas.height = originalImage.height;
-
-    // Blur handled via canvas filter
-    ctx.filter = `blur(${settings.blur}px)`;
-    ctx.drawImage(originalImage, 0, 0);
-    ctx.filter = 'none';
-
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
+// --- The Core Math Engine (Isolated for reuse) ---
+function processPixels(data) {
     const factor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
 
     for (let i = 0; i < data.length; i += 4) {
@@ -187,9 +176,55 @@ function renderImage() {
         data[i + 1] = Math.min(255, Math.max(0, g));
         data[i + 2] = Math.min(255, Math.max(0, b));
     }
+}
 
+// --- Render Preview (Fast) ---
+function renderPreview() {
+    if (!originalImage) return;
+
+    canvas.width = previewWidth;
+    canvas.height = previewHeight;
+
+    ctx.filter = `blur(${settings.blur}px)`;
+    ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+    ctx.filter = 'none';
+
+    const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
+    processPixels(imgData.data);
     ctx.putImageData(imgData, 0, 0);
 }
 
-// Initial UI Setup
-document.getElementById('panel-presets').classList.add('active'); // Default panel
+// --- Download Full Resolution (Slow but only happens once) ---
+document.getElementById('download-btn').onclick = () => {
+    if (!originalImage) return;
+
+    const btn = document.getElementById('download-btn');
+    btn.textContent = '⏳'; // Show loading state
+    
+    // Give the UI a tiny pause to show the loading icon before freezing to do the math
+    setTimeout(() => {
+        // Create an invisible canvas at FULL size
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = originalImage.width;
+        exportCanvas.height = originalImage.height;
+        const eCtx = exportCanvas.getContext('2d');
+
+        eCtx.filter = `blur(${settings.blur}px)`;
+        eCtx.drawImage(originalImage, 0, 0);
+        eCtx.filter = 'none';
+
+        const imgData = eCtx.getImageData(0, 0, exportCanvas.width, exportCanvas.height);
+        processPixels(imgData.data);
+        eCtx.putImageData(imgData, 0, 0);
+
+        const a = document.createElement('a');
+        a.download = 'edited_photo.jpg';
+        a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
+        a.click();
+
+        btn.textContent = '💾'; // Reset icon
+    }, 50);
+};
+
+// Initial Setup
+document.getElementById('panel-presets').classList.add('active');
