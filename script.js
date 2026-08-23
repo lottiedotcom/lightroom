@@ -185,10 +185,20 @@ function renderPreview() {
     canvas.width = previewWidth;
     canvas.height = previewHeight;
 
-    ctx.filter = `blur(${settings.blur}px)`;
+    // 1. Draw the sharp, unblurred original image first
     ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
-    ctx.filter = 'none';
 
+    // 2. If blur is active, overlay a subtle blur to smooth skin
+    if (settings.blur > 0) {
+        // Map 0-100 to a subtle opacity overlay (max 40% opacity)
+        ctx.globalAlpha = settings.blur / 250; 
+        ctx.filter = `blur(4px)`; // Constant small radius
+        ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+        ctx.filter = 'none';
+        ctx.globalAlpha = 1.0; // Reset opacity
+    }
+
+    // 3. Process the lighting and colors on the blended result
     const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
     processPixels(imgData.data);
     ctx.putImageData(imgData, 0, 0);
@@ -209,9 +219,18 @@ document.getElementById('download-btn').onclick = () => {
         exportCanvas.height = originalImage.height;
         const eCtx = exportCanvas.getContext('2d');
 
-        eCtx.filter = `blur(${settings.blur}px)`;
+        // Apply the same soft-focus technique to the full resolution export
         eCtx.drawImage(originalImage, 0, 0);
-        eCtx.filter = 'none';
+        
+        if (settings.blur > 0) {
+            eCtx.globalAlpha = settings.blur / 250;
+            // Scale the blur radius up slightly for high-res images to maintain the look
+            const blurRadius = Math.max(4, (originalImage.width / 1000) * 2); 
+            eCtx.filter = `blur(${blurRadius}px)`;
+            eCtx.drawImage(originalImage, 0, 0);
+            eCtx.filter = 'none';
+            eCtx.globalAlpha = 1.0;
+        }
 
         const imgData = eCtx.getImageData(0, 0, exportCanvas.width, exportCanvas.height);
         processPixels(imgData.data);
