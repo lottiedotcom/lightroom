@@ -11,7 +11,7 @@ let settings = {
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
     // Point Color (Targeted by eyedropper)
     pickedH: -1, pickedS: 0, pickedL: 0, pointHue: 0, pointSat: 0, pointLum: 0,
-    // 8-Channel HSL (H, S, L for Red, Org, Yel, Grn, Aqu, Blu, Pur, Mag)
+    // 8-Channel HSL 
     redH: 0, redS: 0, redL: 0, orgH: 0, orgS: 0, orgL: 0, yelH: 0, yelS: 0, yelL: 0,
     grnH: 0, grnS: 0, grnL: 0, aquH: 0, aquS: 0, aquL: 0, bluH: 0, bluS: 0, bluL: 0,
     purH: 0, purS: 0, purL: 0, magH: 0, magS: 0, magL: 0,
@@ -21,7 +21,47 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// UI Toggles
+// --- History System (Undo / Redo) ---
+let history = [];
+let historyIndex = -1;
+
+function saveHistory() {
+    // Slice off any "redo" futures if we made a new change
+    history = history.slice(0, historyIndex + 1);
+    // Push a deep copy of the settings object
+    history.push(JSON.parse(JSON.stringify(settings)));
+    historyIndex++;
+    updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+    document.getElementById('undo-btn').disabled = historyIndex <= 0;
+    document.getElementById('redo-btn').disabled = historyIndex >= history.length - 1;
+}
+
+document.getElementById('undo-btn').addEventListener('click', () => {
+    if (historyIndex > 0) {
+        historyIndex--;
+        settings = JSON.parse(JSON.stringify(history[historyIndex]));
+        updateUI();
+        updateHistoryButtons();
+    }
+});
+
+document.getElementById('redo-btn').addEventListener('click', () => {
+    if (historyIndex < history.length - 1) {
+        historyIndex++;
+        settings = JSON.parse(JSON.stringify(history[historyIndex]));
+        updateUI();
+        updateHistoryButtons();
+    }
+});
+
+// Save initial blank state
+saveHistory();
+
+
+// --- UI Toggles ---
 const tabBtns = document.querySelectorAll('.tab-btn');
 const toolPanels = document.querySelectorAll('.tool-panel');
 tabBtns.forEach(btn => {
@@ -34,6 +74,7 @@ tabBtns.forEach(btn => {
 });
 
 const sliders = document.querySelectorAll('input[type="range"]');
+
 function updateUI() {
     sliders.forEach(slider => {
         slider.value = settings[slider.id];
@@ -42,16 +83,23 @@ function updateUI() {
     });
     requestAnimationFrame(renderPreview);
 }
+
 sliders.forEach(slider => {
+    // Fire constantly while dragging
     slider.addEventListener('input', (e) => {
         settings[e.target.id] = parseFloat(e.target.value);
         let valDisplay = document.getElementById(`val-${e.target.id}`);
         if(valDisplay) valDisplay.textContent = e.target.value;
         requestAnimationFrame(renderPreview); 
     });
+    
+    // Save history only when user lets go of the slider
+    slider.addEventListener('change', () => {
+        saveHistory();
+    });
 });
 
-// Upload Logic
+// --- File & Preset Logic ---
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('file-upload').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -73,6 +121,14 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
     reader.readAsDataURL(file);
 });
 
+document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
+document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
+document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
+document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
+document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
+document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
+
+
 // --- Point Color Eyedropper Logic ---
 let isPicking = false;
 const pickerBtn = document.getElementById('picker-btn');
@@ -87,7 +143,6 @@ pickerBtn.addEventListener('click', () => {
 
 canvas.addEventListener('mousemove', (e) => {
     if(!isPicking) return;
-    const rect = canvas.getBoundingClientRect();
     pickerTarget.style.left = `${e.clientX}px`;
     pickerTarget.style.top = `${e.clientY}px`;
 });
@@ -95,13 +150,11 @@ canvas.addEventListener('mousemove', (e) => {
 canvas.addEventListener('click', (e) => {
     if(!isPicking) return;
     const rect = canvas.getBoundingClientRect();
-    // Scale screen coordinates to canvas coordinates
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
     
-    // Get RGB of clicked pixel
     const pixel = ctx.getImageData(x, y, 1, 1).data;
     const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
     
@@ -111,7 +164,9 @@ canvas.addEventListener('click', (e) => {
     isPicking = false;
     pickerBtn.textContent = "Activate Eyedropper 💉";
     pickerTarget.style.display = "none";
+    saveHistory(); // Save picking a color as an undoable step
 });
+
 
 // --- Math Helpers ---
 function rgbToHsl(r, g, b) {
@@ -148,7 +203,6 @@ function hslToRgb(h, s, l) {
     return [r * 255, g * 255, b * 255];
 }
 
-// Parametric Tone Curve Helper
 function applyCurve(lum, high, light, dark, shadow) {
     let mod = 0;
     if (lum > 192) mod = high * ((lum - 192) / 63);
@@ -173,19 +227,17 @@ function processPixels(data, width, height) {
         r += settings.temp * 0.5; b -= settings.temp * 0.5;
         g += settings.tint * 0.5;
 
-        // Approximation of Dehaze (Contrast boost in darks + blue removal)
         if (settings.dehaze !== 0) {
             let dAmt = settings.dehaze / 100;
             let darkFactor = 1 - ((r+g+b)/3 / 255);
             r -= dAmt * 20 * darkFactor; 
             g -= dAmt * 25 * darkFactor; 
-            b -= dAmt * 40 * darkFactor; // Remove blue cast
+            b -= dAmt * 40 * darkFactor; 
         }
 
         let [h, s, l] = rgbToHsl(r, g, b);
         let hMod = 0, sMod = 0, lMod = 0;
 
-        // 8-Channel HSL Routing
         if (h > 345 || h <= 15) { hMod=settings.redH; sMod=settings.redS; lMod=settings.redL; }
         else if (h > 15 && h <= 45) { hMod=settings.orgH; sMod=settings.orgS; lMod=settings.orgL; }
         else if (h > 45 && h <= 75) { hMod=settings.yelH; sMod=settings.yelS; lMod=settings.yelL; }
@@ -195,10 +247,9 @@ function processPixels(data, width, height) {
         else if (h > 260 && h <= 290) { hMod=settings.purH; sMod=settings.purS; lMod=settings.purL; }
         else if (h > 290 && h <= 345) { hMod=settings.magH; sMod=settings.magS; lMod=settings.magL; }
 
-        // Point Color Logic (Distance Check)
         if (settings.pickedH !== -1) {
             let hueDist = Math.min(Math.abs(h - settings.pickedH), 360 - Math.abs(h - settings.pickedH));
-            if (hueDist < 30) { // 30 degree spread
+            if (hueDist < 30) {
                 let strength = 1 - (hueDist / 30);
                 hMod += settings.pointHue * strength;
                 sMod += settings.pointSat * strength;
@@ -215,12 +266,10 @@ function processPixels(data, width, height) {
 
         let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
         
-        // Parametric Curve
         let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
         let cRatio = cLum / (luminance + 0.001);
         r *= cRatio; g *= cRatio; b *= cRatio;
 
-        // Texture / Clarity Math
         if (settings.clarity !== 0 || settings.texture !== 0) {
             let cAmt = settings.clarity / 100;
             let tAmt = settings.texture / 100;
@@ -238,7 +287,6 @@ function processPixels(data, width, height) {
     }
 }
 
-// Sharpen Matrix
 function applySharpen(ctx, w, h, amount) {
     if (amount <= 0) return;
     const imgData = ctx.getImageData(0, 0, w, h);
@@ -263,7 +311,7 @@ function renderPreview() {
     ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
     if (settings.blur > 0 || settings.noiseRed > 0) {
-        let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); // Faux noise reduction via gentle blur
+        let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
         ctx.globalAlpha = settings.blur > 0 ? (settings.blur/250) : (settings.noiseRed/100); 
         ctx.filter = `blur(${bRad}px)`;
         ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
