@@ -11,7 +11,11 @@
     <div class="app-container">
         <header class="top-bar">
             <h2>✨ Editor ✨</h2>
-            <button id="download-btn" class="icon-btn" disabled>💾</button>
+            <div class="top-actions">
+                <button id="undo-btn" class="icon-btn" disabled>↩️</button>
+                <button id="redo-btn" class="icon-btn" disabled>↪️</button>
+                <button id="download-btn" class="icon-btn" disabled>💾</button>
+            </div>
         </header>
 
         <main class="preview-area" id="preview-container">
@@ -37,6 +41,7 @@
                     <button id="load-preset-btn" class="btn pink-btn">Load</button>
                     <input type="file" id="load-preset" accept=".json" hidden>
                 </div>
+                <button id="reset-btn" class="btn main-btn">Reset All Settings</button>
             </div>
 
             <!-- Light & Curve -->
