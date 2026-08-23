@@ -1,126 +1,105 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Plum's Mobile Editor</title>
-    <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div class="app-container">
-        
-        <!-- Header -->
-        <header class="top-bar">
-            <h2>✨ Editor ✨</h2>
-            <button id="download-btn" class="icon-btn" disabled>💾</button>
-        </header>
+:root {
+    --bg-main: #fff0f5; 
+    --panel-bg: #ffffff;
+    --text-color: #5c4d5c; 
+    --text-light: #998a99;
+    --pink-accent: #ffb6c1;
+    --pink-hover: #ff9eb0;
+    --blue-accent: #bfe6ff;
+    --blue-hover: #a8dfff;
+    --border-radius: 16px;
+    --nav-height: 70px;
+}
 
-        <!-- Main Preview Area -->
-        <main class="preview-area">
-            <canvas id="canvas"></canvas>
-            <div id="status">
-                <p>Upload an image to start 🎀</p>
-                <button id="upload-btn" class="btn blue-btn">Choose Photo</button>
-                <input type="file" id="file-upload" accept="image/*" hidden>
-            </div>
-        </main>
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-        <!-- Sliders & Tools Panels (Hidden by default) -->
-        <div class="panels-container">
-            
-            <!-- File & Presets Panel -->
-            <div id="panel-presets" class="tool-panel">
-                <div class="panel-header">Presets & Tools</div>
-                <div class="button-grid">
-                    <button id="copy-preset" class="btn pink-btn">Copy Preset</button>
-                    <button id="paste-preset" class="btn pink-btn">Paste Preset</button>
-                    <button id="save-preset" class="btn pink-btn">Save to JSON</button>
-                    <button id="load-preset-btn" class="btn pink-btn">Load JSON</button>
-                    <input type="file" id="load-preset" accept=".json" hidden>
-                </div>
-                <button id="reset-btn" class="btn main-btn">Reset Image All</button>
-            </div>
+body {
+    font-family: 'Quicksand', sans-serif;
+    background-color: var(--bg-main);
+    color: var(--text-color);
+    position: fixed; 
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden; 
+    overscroll-behavior: none; 
+}
 
-            <!-- Light Panel -->
-            <div id="panel-light" class="tool-panel">
-                <div class="panel-header">Light</div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Exposure</span><span class="val" id="val-exposure">0</span></div>
-                    <input type="range" id="exposure" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Contrast</span><span class="val" id="val-contrast">0</span></div>
-                    <input type="range" id="contrast" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Highlights</span><span class="val" id="val-highlights">0</span></div>
-                    <input type="range" id="highlights" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Shadows</span><span class="val" id="val-shadows">0</span></div>
-                    <input type="range" id="shadows" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Whites</span><span class="val" id="val-whites">0</span></div>
-                    <input type="range" id="whites" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Blacks</span><span class="val" id="val-blacks">0</span></div>
-                    <input type="range" id="blacks" min="-100" max="100" value="0">
-                </div>
-            </div>
+.app-container { display: flex; flex-direction: column; height: 100%; }
 
-            <!-- Color Panel -->
-            <div id="panel-color" class="tool-panel">
-                <div class="panel-header">Color</div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Temperature</span><span class="val" id="val-temp">0</span></div>
-                    <input type="range" id="temp" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Tint</span><span class="val" id="val-tint">0</span></div>
-                    <input type="range" id="tint" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Vibrance</span><span class="val" id="val-vibrance">0</span></div>
-                    <input type="range" id="vibrance" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Saturation</span><span class="val" id="val-saturation">0</span></div>
-                    <input type="range" id="saturation" min="-100" max="100" value="0">
-                </div>
-            </div>
+.top-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 1rem 1.5rem; background-color: var(--panel-bg);
+    box-shadow: 0 2px 10px rgba(255, 182, 193, 0.2); z-index: 10;
+}
 
-            <!-- Effects Panel -->
-            <div id="panel-effects" class="tool-panel">
-                <div class="panel-header">Effects</div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Blur</span><span class="val" id="val-blur">0</span></div>
-                    <input type="range" id="blur" min="0" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Clarity</span><span class="val" id="val-clarity">0</span></div>
-                    <input type="range" id="clarity" min="-100" max="100" value="0">
-                </div>
-                <div class="slider-group">
-                    <div class="slider-label"><span>Grain</span><span class="val" id="val-grain">0</span></div>
-                    <input type="range" id="grain" min="0" max="100" value="0">
-                </div>
-            </div>
-            
-        </div>
+.top-bar h2 { font-size: 1.2rem; color: var(--pink-hover); }
 
-        <!-- Bottom Navigation Bar -->
-        <nav class="bottom-nav">
-            <button class="tab-btn active" data-target="panel-presets">📁<br>Presets</button>
-            <button class="tab-btn" data-target="panel-light">☀️<br>Light</button>
-            <button class="tab-btn" data-target="panel-color">🌡️<br>Color</button>
-            <button class="tab-btn" data-target="panel-effects">✨<br>Effects</button>
-        </nav>
+.icon-btn { background: none; border: none; font-size: 1.5rem; cursor: pointer; opacity: 1; transition: 0.2s; }
+.icon-btn:disabled { opacity: 0.3; }
 
-    </div>
+.preview-area {
+    flex: 1; display: flex; justify-content: center;
+    align-items: center; padding: 1rem; position: relative; overflow: hidden;
+}
 
-    <script src="script.js"></script>
-</body>
-</html>
+canvas {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+    border-radius: 8px; box-shadow: 0 5px 20px rgba(92, 77, 92, 0.1); display: none;
+}
+
+#status { text-align: center; display: flex; flex-direction: column; gap: 1rem; align-items: center; }
+#status p { font-weight: 700; color: var(--text-light); }
+
+.panels-container {
+    position: relative; background-color: var(--panel-bg);
+    border-top-left-radius: 24px; border-top-right-radius: 24px;
+    box-shadow: 0 -4px 20px rgba(255, 182, 193, 0.3); z-index: 10;
+}
+
+.tool-panel {
+    display: none; padding: 1.5rem; padding-bottom: calc(1.5rem + var(--nav-height));
+    max-height: 50vh; overflow-y: auto; -webkit-overflow-scrolling: touch; 
+}
+
+.tool-panel.active { display: block; }
+
+.panel-header {
+    text-align: center; font-weight: 700; margin-bottom: 1.5rem;
+    color: var(--text-color); border-bottom: 2px dashed var(--pink-accent); padding-bottom: 0.5rem;
+}
+
+h4 { font-size: 0.95rem; }
+
+.slider-group { margin-bottom: 1.5rem; }
+.slider-label { display: flex; justify-content: space-between; font-size: 0.9rem; font-weight: 700; margin-bottom: 0.5rem; }
+.slider-label .val { color: var(--text-light); }
+
+input[type="range"] {
+    width: 100%; appearance: none; height: 4px; background: #e0e0e0; border-radius: 2px; outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+    appearance: none; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--blue-hover); cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+.btn {
+    padding: 0.8rem 1.2rem; border-radius: 12px; font-weight: 700;
+    cursor: pointer; border: none; color: var(--text-color); width: 100%;
+}
+.blue-btn { background-color: var(--blue-accent); }
+.pink-btn { background-color: var(--pink-accent); }
+.main-btn { background-color: transparent; border: 2px solid var(--pink-accent); margin-top: 1rem; }
+
+.button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+
+.bottom-nav {
+    position: fixed; bottom: 0; left: 0; width: 100%; height: var(--nav-height);
+    background-color: var(--panel-bg); display: flex; align-items: center; border-top: 1px solid #f0f0f0; z-index: 20;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; padding: 0 1rem; gap: 1.5rem;
+}
+
+.tab-btn {
+    background: none; border: none; font-family: inherit; font-size: 0.75rem; font-weight: 700; color: var(--text-light);
+    cursor: pointer; padding: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; flex-shrink: 0; 
+}
+.tab-btn.active { color: var(--blue-hover); }
