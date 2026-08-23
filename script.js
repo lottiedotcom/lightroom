@@ -9,7 +9,7 @@ let settings = {
     exposure: 0, contrast: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
     // Color
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
-    // Point Color (Targeted by eyedropper)
+    // Point Color
     pickedH: -1, pickedS: 0, pickedL: 0, pointHue: 0, pointSat: 0, pointLum: 0,
     // 8-Channel HSL 
     redH: 0, redS: 0, redL: 0, orgH: 0, orgS: 0, orgL: 0, yelH: 0, yelS: 0, yelL: 0,
@@ -26,9 +26,7 @@ let history = [];
 let historyIndex = -1;
 
 function saveHistory() {
-    // Slice off any "redo" futures if we made a new change
     history = history.slice(0, historyIndex + 1);
-    // Push a deep copy of the settings object
     history.push(JSON.parse(JSON.stringify(settings)));
     historyIndex++;
     updateHistoryButtons();
@@ -57,11 +55,9 @@ document.getElementById('redo-btn').addEventListener('click', () => {
     }
 });
 
-// Save initial blank state
 saveHistory();
 
-
-// --- UI Toggles ---
+// --- UI Navigation ---
 const tabBtns = document.querySelectorAll('.tab-btn');
 const toolPanels = document.querySelectorAll('.tool-panel');
 tabBtns.forEach(btn => {
@@ -73,33 +69,66 @@ tabBtns.forEach(btn => {
     });
 });
 
+// --- Sliders & Numeric Inputs (Two-Way Binding) ---
 const sliders = document.querySelectorAll('input[type="range"]');
+const numInputs = document.querySelectorAll('.val-input');
 
 function updateUI() {
     sliders.forEach(slider => {
         slider.value = settings[slider.id];
-        let valDisplay = document.getElementById(`val-${slider.id}`);
-        if(valDisplay) valDisplay.textContent = settings[slider.id];
+        const numInp = document.getElementById(`num-${slider.id}`);
+        if (numInp) numInp.value = settings[slider.id];
     });
     requestAnimationFrame(renderPreview);
 }
 
 sliders.forEach(slider => {
-    // Fire constantly while dragging
     slider.addEventListener('input', (e) => {
-        settings[e.target.id] = parseFloat(e.target.value);
-        let valDisplay = document.getElementById(`val-${e.target.id}`);
-        if(valDisplay) valDisplay.textContent = e.target.value;
+        const val = parseFloat(e.target.value);
+        settings[e.target.id] = val;
+        const numInp = document.getElementById(`num-${e.target.id}`);
+        if (numInp) numInp.value = val;
         requestAnimationFrame(renderPreview); 
     });
-    
-    // Save history only when user lets go of the slider
     slider.addEventListener('change', () => {
         saveHistory();
     });
 });
 
-// --- File & Preset Logic ---
+numInputs.forEach(numInp => {
+    const settingKey = numInp.id.replace('num-', '');
+    
+    // Live update when typing
+    numInp.addEventListener('input', (e) => {
+        let val = parseFloat(e.target.value);
+        if (isNaN(val)) return;
+        const min = parseFloat(numInp.min), max = parseFloat(numInp.max);
+        if (!isNaN(min) && val < min) val = min;
+        if (!isNaN(max) && val > max) val = max;
+
+        settings[settingKey] = val;
+        const slider = document.getElementById(settingKey);
+        if (slider) slider.value = val;
+        requestAnimationFrame(renderPreview);
+    });
+
+    // Save history and sanitize on blur / enter
+    numInp.addEventListener('change', (e) => {
+        let val = parseFloat(e.target.value);
+        if (isNaN(val)) val = 0;
+        const min = parseFloat(numInp.min), max = parseFloat(numInp.max);
+        if (!isNaN(min) && val < min) val = min;
+        if (!isNaN(max) && val > max) val = max;
+        numInp.value = val;
+        settings[settingKey] = val;
+        const slider = document.getElementById(settingKey);
+        if (slider) slider.value = val;
+        updateUI();
+        saveHistory();
+    });
+});
+
+// --- Upload & File Setup ---
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('file-upload').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -114,6 +143,7 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
             canvas.style.display = 'block';
             document.getElementById('status').style.display = 'none';
             document.getElementById('download-btn').disabled = false;
+            document.getElementById('auto-btn').disabled = false;
             renderPreview();
         };
         originalImage.src = event.target.result;
@@ -121,6 +151,87 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
     reader.readAsDataURL(file);
 });
 
+// --- Intuitive Auto Enhancement Engine ---
+document.getElementById('auto-btn').addEventListener('click', () => {
+    if (!originalImage) return;
+
+    // Draw untouched preview to a temporary canvas for pixel inspection
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = previewWidth;
+    tempCanvas.height = previewHeight;
+    const tCtx = tempCanvas.getContext('2d');
+    tCtx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+
+    const rawData = tCtx.getImageData(0, 0, previewWidth, previewHeight).data;
+    const totalPixels = rawData.length / 4;
+
+    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0;
+    const histogram = new Array(256).fill(0);
+
+    for (let i = 0; i < rawData.length; i += 4) {
+        const r = rawData[i], g = rawData[i+1], b = rawData[i+2];
+        const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        sumR += r; sumG += g; sumB += b;
+        sumLum += lum;
+        histogram[lum]++;
+    }
+
+    const avgR = sumR / totalPixels;
+    const avgG = sumG / totalPixels;
+    const avgB = sumB / totalPixels;
+    const avgLum = sumLum / totalPixels;
+
+    // 1. Calculate Percentiles (1% shadow floor, 99% highlight ceiling)
+    let count = 0, p1 = 0, p99 = 255;
+    for (let i = 0; i < 256; i++) {
+        count += histogram[i];
+        if (p1 === 0 && count >= totalPixels * 0.01) p1 = i;
+        if (count >= totalPixels * 0.99) { p99 = i; break; }
+    }
+
+    // 2. Exposure: target mid-tone balance around 128
+    let targetExp = (128 - avgLum) * 0.5;
+    settings.exposure = Math.round(Math.max(-40, Math.min(40, targetExp)));
+
+    // 3. Contrast & Tone Curve (Dynamic Range Stretching)
+    let dynamicRange = p99 - p1;
+    if (dynamicRange < 180) {
+        settings.contrast = Math.round(Math.min(35, (180 - dynamicRange) * 0.35));
+    } else if (dynamicRange > 240) {
+        settings.contrast = -10; // Soften harsh blown contrast
+    } else {
+        settings.contrast = 5;
+    }
+
+    // 4. Highlights and Shadows Balancing
+    if (p99 > 240) settings.highlights = -25; // Pull back harsh blown highlights
+    else if (p99 < 200) settings.highlights = 15;
+
+    if (p1 < 15) settings.shadows = 25; // Lift crushed dark shadows
+    else if (p1 > 40) settings.shadows = -10;
+
+    settings.whites = Math.round(Math.max(-20, Math.min(20, (240 - p99) * 0.3)));
+    settings.blacks = Math.round(Math.max(-20, Math.min(20, (p1 - 10) * 0.3)));
+
+    // 5. White Balance (Gray-World Color Cast Correction)
+    const avgGray = (avgR + avgG + avgB) / 3;
+    // Temp: warm vs cool cast
+    const rDiff = avgR - avgGray;
+    const bDiff = avgB - avgGray;
+    settings.temp = Math.round(Math.max(-30, Math.min(30, (bDiff - rDiff) * 0.4)));
+
+    // Tint: green vs magenta cast
+    const gDiff = avgG - ((avgR + avgB) / 2);
+    settings.tint = Math.round(Math.max(-25, Math.min(25, -gDiff * 0.5)));
+
+    // 6. Color Pop: clean subtle vibrance boost
+    settings.vibrance = 12;
+
+    updateUI();
+    saveHistory();
+});
+
+// --- Presets ---
 document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
 document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
 document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
@@ -128,8 +239,7 @@ document.getElementById('load-preset-btn').onclick = () => document.getElementBy
 document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
 document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
 
-
-// --- Point Color Eyedropper Logic ---
+// --- Point Color Eyedropper ---
 let isPicking = false;
 const pickerBtn = document.getElementById('picker-btn');
 const pickerTarget = document.getElementById('picker-target');
@@ -164,11 +274,10 @@ canvas.addEventListener('click', (e) => {
     isPicking = false;
     pickerBtn.textContent = "Activate Eyedropper 💉";
     pickerTarget.style.display = "none";
-    saveHistory(); // Save picking a color as an undoable step
+    saveHistory();
 });
 
-
-// --- Math Helpers ---
+// --- Math Functions ---
 function rgbToHsl(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     let max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -212,21 +321,20 @@ function applyCurve(lum, high, light, dark, shadow) {
     return lum + mod;
 }
 
-// --- The Math Engine ---
+// --- Main Processing Engine ---
 function processPixels(data, width, height) {
     const factor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
-    const cx = width / 2; const cy = height / 2;
-    const maxDist = Math.sqrt(cx*cx + cy*cy);
 
     for (let i = 0; i < data.length; i += 4) {
         let r = data[i], g = data[i + 1], b = data[i + 2];
-        let x = (i / 4) % width, y = Math.floor((i / 4) / width);
 
+        // 1. Exposure & Light
         let exp = 1 + (settings.exposure / 100);
         r *= exp; g *= exp; b *= exp;
         r += settings.temp * 0.5; b -= settings.temp * 0.5;
         g += settings.tint * 0.5;
 
+        // 2. Dehaze
         if (settings.dehaze !== 0) {
             let dAmt = settings.dehaze / 100;
             let darkFactor = 1 - ((r+g+b)/3 / 255);
@@ -235,6 +343,7 @@ function processPixels(data, width, height) {
             b -= dAmt * 40 * darkFactor; 
         }
 
+        // 3. HSL & Point Color
         let [h, s, l] = rgbToHsl(r, g, b);
         let hMod = 0, sMod = 0, lMod = 0;
 
@@ -264,12 +373,23 @@ function processPixels(data, width, height) {
             [r, g, b] = hslToRgb(h, s, l);
         }
 
+        // 4. Tone Curve & Highlights/Shadows
         let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-        
         let cLum = applyCurve(luminance, settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
         let cRatio = cLum / (luminance + 0.001);
         r *= cRatio; g *= cRatio; b *= cRatio;
 
+        if (luminance > 128) {
+            let highMod = (luminance - 128) / 128;
+            r += settings.highlights * highMod; g += settings.highlights * highMod; b += settings.highlights * highMod;
+        } else {
+            let shadMod = (128 - luminance) / 128;
+            r += settings.shadows * shadMod; g += settings.shadows * shadMod; b += settings.shadows * shadMod;
+        }
+        r += settings.whites; g += settings.whites; b += settings.whites;
+        r -= settings.blacks; g -= settings.blacks; b -= settings.blacks;
+
+        // 5. Texture & Clarity
         if (settings.clarity !== 0 || settings.texture !== 0) {
             let cAmt = settings.clarity / 100;
             let tAmt = settings.texture / 100;
@@ -278,6 +398,12 @@ function processPixels(data, width, height) {
             g += (g - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
             b += (b - luminance) * (cAmt + (tAmt * 0.5)) * midWeight;
         }
+
+        // 6. Contrast & Vibrance
+        let maxRGB = Math.max(r, g, b);
+        let avgRGB = (r + g + b) / 3;
+        let totalSat = (settings.saturation / 100) + ((settings.vibrance / 100) * (1 - (maxRGB - avgRGB) / 255));
+        r += (r - avgRGB) * totalSat; g += (g - avgRGB) * totalSat; b += (b - avgRGB) * totalSat;
 
         r = factor * (r - 128) + 128; g = factor * (g - 128) + 128; b = factor * (b - 128) + 128;
 
