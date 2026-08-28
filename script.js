@@ -15,6 +15,16 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
+// --- Render Debouncing for Smoothness ---
+let renderFrameId = null;
+function queueRender() {
+    if (renderFrameId) cancelAnimationFrame(renderFrameId);
+    renderFrameId = requestAnimationFrame(() => {
+        renderPreview();
+        renderFrameId = null;
+    });
+}
+
 // --- History System ---
 let history = [];
 let historyIndex = -1;
@@ -89,7 +99,7 @@ function updateUI() {
             if (numInp) numInp.value = settings[slider.id];
         }
     });
-    requestAnimationFrame(renderPreview);
+    queueRender();
 }
 
 sliders.forEach(slider => {
@@ -98,7 +108,7 @@ sliders.forEach(slider => {
         settings[e.target.id] = val;
         const numInp = document.getElementById(`num-${e.target.id}`);
         if (numInp) numInp.value = val;
-        requestAnimationFrame(renderPreview); 
+        queueRender(); 
     });
     slider.addEventListener('change', () => { saveHistory(); });
 });
@@ -115,7 +125,7 @@ numInputs.forEach(numInp => {
         settings[settingKey] = val;
         const slider = document.getElementById(settingKey);
         if (slider) slider.value = val;
-        requestAnimationFrame(renderPreview);
+        queueRender();
     });
 
     numInp.addEventListener('change', (e) => {
@@ -153,7 +163,7 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
             document.getElementById('auto-btn').disabled = false;
             
             setTimeout(() => {
-                renderPreview();
+                queueRender();
             }, 50);
         };
         originalImage.src = event.target.result;
