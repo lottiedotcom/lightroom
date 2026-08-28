@@ -1,8 +1,16 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const videoSource = document.getElementById('video-source');
 let originalImage = null;
-const MAX_PREVIEW_SIZE = 800; 
+let isVideo = false;
+
+// Batch State
+let isBatchMode = false;
+let batchFiles = [];
+let batchIndex = 0;
+
 let previewWidth = 0, previewHeight = 0;
+let videoLoopId = null;
 
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
@@ -15,9 +23,10 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// --- Render Debouncing for Smoothness ---
+// --- Render Debouncing ---
 let renderFrameId = null;
 function queueRender() {
+    if (isVideo) return; // Video is constantly rendering in a loop
     if (renderFrameId) cancelAnimationFrame(renderFrameId);
     renderFrameId = requestAnimationFrame(() => {
         renderPreview();
@@ -61,7 +70,7 @@ document.getElementById('redo-btn').addEventListener('click', () => {
 
 saveHistory();
 
-// --- UI Navigation & Collapse Logic ---
+// --- UI Navigation ---
 const tabBtns = document.querySelectorAll('.tab-btn');
 const toolPanels = document.querySelectorAll('.tool-panel');
 const mainPanelsContainer = document.getElementById('main-panels-container');
@@ -127,7 +136,6 @@ numInputs.forEach(numInp => {
         if (slider) slider.value = val;
         queueRender();
     });
-
     numInp.addEventListener('change', (e) => {
         let val = parseFloat(e.target.value);
         if (isNaN(val)) val = 0;
@@ -141,44 +149,90 @@ numInputs.forEach(numInp => {
     });
 });
 
-// --- Upload & File Setup ---
-document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
-document.getElementById('file-upload').addEventListener('change', (e) => {
-    const file = e.target.files[0];
+// --- File Handling Core ---
+function loadFile(file) {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
+    
+    if (videoLoopId) {
+        cancelAnimationFrame(videoLoopId);
+        videoSource.pause();
+    }
+    
+    isVideo = file.type.startsWith('video/');
+    const url = URL.createObjectURL(file);
+    const MAX_PREVIEW_SIZE = isVideo ? 500 : 800; // Lower resolution for smooth video editing
+    
+    canvas.style.display = 'block';
+    document.getElementById('status').style.display = 'none';
+    document.getElementById('download-btn').disabled = false;
+    document.getElementById('auto-btn').disabled = false;
+
+    if (isVideo) {
+        videoSource.src = url;
+        videoSource.onloadeddata = () => {
+            const width = videoSource.videoWidth;
+            const height = videoSource.videoHeight;
+            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
+            previewWidth = Math.floor(width * scale);
+            previewHeight = Math.floor(height * scale);
+            canvas.width = previewWidth;
+            canvas.height = previewHeight;
+            
+            videoSource.play();
+            renderVideoLoop();
+        };
+    } else {
         originalImage = new Image();
         originalImage.onload = () => {
             const width = originalImage.naturalWidth || originalImage.width;
             const height = originalImage.naturalHeight || originalImage.height;
             const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
-            
             previewWidth = Math.floor(width * scale);
             previewHeight = Math.floor(height * scale);
+            canvas.width = previewWidth;
+            canvas.height = previewHeight;
             
-            canvas.style.display = 'block';
-            document.getElementById('status').style.display = 'none';
-            document.getElementById('download-btn').disabled = false;
-            document.getElementById('auto-btn').disabled = false;
-            
-            setTimeout(() => {
-                queueRender();
-            }, 50);
+            setTimeout(() => { queueRender(); }, 50);
         };
-        originalImage.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
-});
+        originalImage.src = url;
+    }
+}
 
-// --- Intuitive Auto Enhancement ---
+document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
+document.getElementById('file-upload').addEventListener('change', (e) => loadFile(e.target.files[0]));
+
+// --- Video Realtime Render Loop ---
+function renderVideoLoop() {
+    if (!isVideo) return;
+    if (!videoSource.paused && !videoSource.ended) {
+        ctx.drawImage(videoSource, 0, 0, previewWidth, previewHeight);
+        
+        if (settings.blur > 0 || settings.noiseRed > 0) {
+            let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
+            ctx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100); 
+            ctx.filter = `blur(${bRad}px)`;
+            ctx.drawImage(videoSource, 0, 0, previewWidth, previewHeight);
+            ctx.filter = 'none'; ctx.globalAlpha = 1.0; 
+        }
+
+        const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
+        processPixels(imgData.data, previewWidth, previewHeight, settings);
+        ctx.putImageData(imgData, 0, 0);
+        applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
+    }
+    videoLoopId = requestAnimationFrame(renderVideoLoop);
+}
+
+// --- Intuitive Auto Enhance (Updated for Video) ---
 document.getElementById('auto-btn').addEventListener('click', () => {
-    if (!originalImage) return;
+    if (!originalImage && !isVideo) return;
 
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = previewWidth; tempCanvas.height = previewHeight;
     const tCtx = tempCanvas.getContext('2d');
-    tCtx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+    
+    if (isVideo) tCtx.drawImage(videoSource, 0, 0, previewWidth, previewHeight);
+    else tCtx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
     const rawData = tCtx.getImageData(0, 0, previewWidth, previewHeight).data;
     const totalPixels = rawData.length / 4;
@@ -232,7 +286,7 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     saveHistory();
 });
 
-// --- Presets & Batch Processing ---
+// --- Presets ---
 document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
 document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
 document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
@@ -240,48 +294,54 @@ document.getElementById('load-preset-btn').onclick = () => document.getElementBy
 document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
 document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
 
-// --- Batch Process Engine ---
+// --- Interactive Batch Queue Engine ---
 const batchBtn = document.getElementById('batch-process-btn');
 const batchInput = document.getElementById('batch-file-input');
 
 batchBtn.onclick = () => batchInput.click();
 
-batchInput.addEventListener('change', async (e) => {
+batchInput.addEventListener('change', (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
+    
+    isBatchMode = true;
+    batchFiles = files;
+    batchIndex = 0;
+    
+    document.getElementById('batch-ui').style.display = 'flex';
+    document.querySelector('.bottom-nav').style.display = 'none'; // hide normal nav
+    loadBatchItem();
+});
 
-    batchBtn.disabled = true;
-    batchBtn.textContent = `Processing 0/${files.length}... ⏳`;
-
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        batchBtn.textContent = `Processing ${i + 1}/${files.length}... ⏳`;
-        
-        await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                const img = new Image();
-                img.onload = () => {
-                    const processedCanvas = processImageCanvas(img, settings);
-                    const a = document.createElement('a');
-                    const nameParts = file.name.split('.');
-                    const ext = nameParts.pop();
-                    a.download = `${nameParts.join('.')}_edited.jpg`;
-                    a.href = processedCanvas.toDataURL('image/jpeg', 0.95);
-                    a.click();
-                    setTimeout(resolve, 350);
-                };
-                img.src = event.target.result;
-            };
-            reader.readAsDataURL(file);
-        });
+function loadBatchItem() {
+    if (batchIndex >= batchFiles.length) {
+        exitBatchMode();
+        return;
     }
+    document.getElementById('batch-count').innerText = `${batchIndex + 1} / ${batchFiles.length}`;
+    loadFile(batchFiles[batchIndex]);
+}
 
-    batchBtn.disabled = false;
-    batchBtn.textContent = '📦 Batch Apply & Export';
+function exitBatchMode() {
+    isBatchMode = false;
+    batchFiles = [];
+    document.getElementById('batch-ui').style.display = 'none';
+    document.querySelector('.bottom-nav').style.display = 'flex'; // restore normal nav
     batchInput.value = '';
     alert('Batch export complete! ✨');
-});
+}
+
+document.getElementById('batch-download-btn').onclick = async () => {
+    await exportCurrentFile(); 
+    batchIndex++;
+    loadBatchItem();
+};
+document.getElementById('batch-skip-btn').onclick = () => {
+    batchIndex++;
+    loadBatchItem();
+};
+document.getElementById('batch-cancel-btn').onclick = exitBatchMode;
+
 
 // --- Point Color Eyedropper ---
 let isPicking = false;
@@ -529,9 +589,8 @@ function processImageCanvas(img, currentSettings) {
     const eCtx = fullCanvas.getContext('2d');
     eCtx.drawImage(img, 0, 0, width, height);
 
-    // Dynamic blur radius calibrated to resolution
     if (currentSettings.blur > 0 || currentSettings.noiseRed > 0) {
-        const previewScale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
+        const previewScale = Math.min(1, 800 / Math.max(width, height));
         const scaleRatio = 1 / previewScale;
         const baseRad = currentSettings.blur > 0 ? 4 : (currentSettings.noiseRed / 20);
         const bRad = Math.max(1, baseRad * scaleRatio);
@@ -547,16 +606,12 @@ function processImageCanvas(img, currentSettings) {
     processPixels(imgData.data, width, height, currentSettings);
     eCtx.putImageData(imgData, 0, 0);
 
-    if (currentSettings.sharpen > 0) {
-        applySharpen(eCtx, width, height, currentSettings.sharpen);
-    }
-
+    if (currentSettings.sharpen > 0) applySharpen(eCtx, width, height, currentSettings.sharpen);
     return fullCanvas;
 }
 
 function renderPreview() {
-    if (!originalImage) return;
-    canvas.width = previewWidth; canvas.height = previewHeight;
+    if (!originalImage || isVideo) return;
     ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
     if (settings.blur > 0 || settings.noiseRed > 0) {
@@ -573,18 +628,96 @@ function renderPreview() {
     applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
 }
 
-document.getElementById('download-btn').onclick = () => {
-    if (!originalImage) return;
-    const btn = document.getElementById('download-btn');
+// --- Unified Download Function (Images & Video) ---
+async function exportCurrentFile() {
+    if (!originalImage && !isVideo) return;
+    
+    const btnId = isBatchMode ? 'batch-download-btn' : 'download-btn';
+    const btn = document.getElementById(btnId);
+    const prevText = btn.textContent;
     btn.textContent = '⏳'; 
-    setTimeout(() => {
-        const exportCanvas = processImageCanvas(originalImage, settings);
-        const a = document.createElement('a');
-        a.download = 'raw_edited.jpg';
-        a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
-        a.click();
-        btn.textContent = '💾';
-    }, 50);
-};
+
+    return new Promise(resolve => {
+        setTimeout(() => {
+            if (!isVideo) {
+                // Export Image
+                const exportCanvas = processImageCanvas(originalImage, settings);
+                const a = document.createElement('a');
+                a.download = `edited_${Date.now()}.jpg`;
+                a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
+                a.click();
+                btn.textContent = prevText;
+                resolve();
+            } else {
+                // Export Video
+                const expCanvas = document.createElement('canvas');
+                // Limit export resolution to 720p maximum to ensure mobile browser doesn't crash during pixel processing
+                const scale = Math.min(1, 1280 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
+                expCanvas.width = Math.floor(videoSource.videoWidth * scale);
+                expCanvas.height = Math.floor(videoSource.videoHeight * scale);
+                const eCtx = expCanvas.getContext('2d');
+
+                const stream = expCanvas.captureStream(30);
+                // Attempt to mux audio if browser supports it
+                if (videoSource.captureStream) {
+                    const vidStream = videoSource.captureStream();
+                    vidStream.getAudioTracks().forEach(track => stream.addTrack(track));
+                }
+
+                const recorder = new MediaRecorder(stream);
+                const chunks = [];
+                recorder.ondataavailable = e => chunks.push(e.data);
+                
+                recorder.onstop = () => {
+                    const blob = new Blob(chunks, { type: 'video/mp4' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `edited_${Date.now()}.mp4`;
+                    a.click();
+                    btn.textContent = prevText;
+                    renderVideoLoop(); // restart preview loop
+                    resolve();
+                };
+
+                // Stop preview render loop, rewind and record
+                if (videoLoopId) cancelAnimationFrame(videoLoopId);
+                videoSource.pause();
+                videoSource.currentTime = 0;
+
+                videoSource.onseeked = () => {
+                    videoSource.onseeked = null; // remove listener
+                    recorder.start();
+                    videoSource.play();
+
+                    function processExportFrame() {
+                        if (videoSource.ended || videoSource.paused) {
+                            recorder.stop();
+                            return;
+                        }
+                        
+                        eCtx.drawImage(videoSource, 0, 0, expCanvas.width, expCanvas.height);
+                        if (settings.blur > 0 || settings.noiseRed > 0) {
+                            let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
+                            eCtx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
+                            eCtx.filter = `blur(${bRad}px)`;
+                            eCtx.drawImage(videoSource, 0, 0, expCanvas.width, expCanvas.height);
+                            eCtx.filter = 'none'; eCtx.globalAlpha = 1.0;
+                        }
+                        const imgData = eCtx.getImageData(0, 0, expCanvas.width, expCanvas.height);
+                        processPixels(imgData.data, expCanvas.width, expCanvas.height, settings);
+                        eCtx.putImageData(imgData, 0, 0);
+                        if(settings.sharpen > 0) applySharpen(eCtx, expCanvas.width, expCanvas.height, settings.sharpen);
+
+                        requestAnimationFrame(processExportFrame);
+                    }
+                    processExportFrame();
+                };
+            }
+        }, 50);
+    });
+}
+
+document.getElementById('download-btn').onclick = () => exportCurrentFile();
 
 document.getElementById('panel-presets').classList.add('active');
+
