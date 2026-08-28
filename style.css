@@ -39,7 +39,15 @@ canvas { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 
     z-index: 10; 
 }
 
-.tool-panel { display: none; padding: 1.5rem; padding-bottom: 120px; max-height: 55vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.tool-panel { 
+    display: none; 
+    padding: 1.5rem; 
+    padding-bottom: 120px; 
+    max-height: 55vh; 
+    overflow-y: auto; 
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+}
 .tool-panel.active { display: block; }
 .panel-header { text-align: center; font-weight: 700; margin-bottom: 1.5rem; color: var(--text-color); border-bottom: 2px dashed var(--pink-accent); padding-bottom: 0.5rem; }
 h4 { font-size: 0.95rem; margin-bottom: 0.5rem; margin-top: 1rem; }
@@ -72,7 +80,15 @@ h4 { font-size: 0.95rem; margin-bottom: 0.5rem; margin-top: 1rem; }
     background-color: #ffffff;
 }
 
-input[type="range"] { width: 100%; appearance: none; height: 4px; background: #e0e0e0; border-radius: 2px; outline: none; }
+input[type="range"] { 
+    width: 100%; 
+    appearance: none; 
+    height: 4px; 
+    background: #e0e0e0; 
+    border-radius: 2px; 
+    outline: none;
+    touch-action: pan-y;
+}
 input[type="range"]::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--blue-hover); cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
 .btn { padding: 0.8rem 1.2rem; border-radius: 12px; font-weight: 700; cursor: pointer; border: none; color: var(--text-color); width: 100%; transition: opacity 0.2s, transform 0.1s; }
 .btn:active { transform: scale(0.98); }
