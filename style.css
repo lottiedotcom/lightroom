@@ -99,3 +99,31 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 20px; heigh
 .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; height: var(--nav-height); background-color: var(--panel-bg); display: flex; align-items: center; border-top: 1px solid #f0f0f0; z-index: 20; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; padding: 0 1rem; gap: 1.5rem; }
 .tab-btn { background: none; border: none; font-family: inherit; font-size: 0.75rem; font-weight: 700; color: var(--text-light); cursor: pointer; padding: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; flex-shrink: 0; transition: color 0.2s; }
 .tab-btn.active { color: var(--blue-hover); }
+
+/* --- Batch UI Controls --- */
+.batch-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background-color: var(--panel-bg);
+    box-shadow: 0 -4px 20px rgba(255, 182, 193, 0.4);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    gap: 0.8rem;
+    border-top-left-radius: 24px; 
+    border-top-right-radius: 24px;
+}
+.batch-status-text {
+    text-align: center;
+    font-weight: 700;
+    color: var(--text-color);
+    font-size: 1rem;
+}
+.batch-actions {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 0.5rem;
+}
