@@ -25,10 +25,11 @@
 
         <main class="preview-area" id="preview-container">
             <canvas id="canvas"></canvas>
+            <video id="video-source" loop playsinline hidden crossorigin="anonymous"></video>
             <div id="status">
-                <p>Upload an image to start 🎀</p>
-                <button id="upload-btn" class="btn blue-btn">Choose Photo</button>
-                <input type="file" id="file-upload" accept="image/*" hidden>
+                <p>Upload an image or video to start 🎀</p>
+                <button id="upload-btn" class="btn blue-btn">Choose File</button>
+                <input type="file" id="file-upload" accept="image/*,video/*" hidden>
             </div>
             <!-- Target overlay for Point Color -->
             <div id="picker-target" style="display: none;">🎯</div>
@@ -48,7 +49,7 @@
                 </div>
                 
                 <button id="batch-process-btn" class="btn blue-btn" style="margin-top: 0.8rem;">📦 Batch Apply & Export</button>
-                <input type="file" id="batch-file-input" accept="image/*" multiple hidden>
+                <input type="file" id="batch-file-input" accept="image/*,video/*" multiple hidden>
                 
                 <button id="reset-btn" class="btn main-btn">Reset All Settings</button>
             </div>
@@ -180,6 +181,16 @@
             <button class="tab-btn" data-target="panel-effects">✨<br>Presence</button>
             <button class="tab-btn" data-target="panel-detail">🔍<br>Detail</button>
         </nav>
+
+        <!-- New Batch Processing Overlay Nav -->
+        <div id="batch-ui" class="batch-bar" style="display: none;">
+            <div class="batch-status-text">Batch Mode: <span id="batch-count">1 / 5</span></div>
+            <div class="batch-actions">
+                <button id="batch-download-btn" class="btn blue-btn">Save & Next</button>
+                <button id="batch-skip-btn" class="btn pink-btn">Skip</button>
+                <button id="batch-cancel-btn" class="btn main-btn" style="margin-top: 0;">Cancel</button>
+            </div>
+        </div>
     </div>
     <script src="script.js"></script>
 </body>
