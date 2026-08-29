@@ -1,23 +1,13 @@
-const glCanvas = document.getElementById('gl-canvas');
-const gl = glCanvas.getContext('webgl', { preserveDrawingBuffer: true });
-
-const videoSource = document.getElementById('video-source');
-const videoControls = document.getElementById('video-controls');
-const vidPlayBtn = document.getElementById('vid-play-btn');
-const vidSeek = document.getElementById('vid-seek');
-
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
 let originalImage = null;
-let isVideo = false;
-let isPlayingVideo = false;
-let mediaRecorder = null;
-let recordedChunks = [];
+const MAX_PREVIEW_SIZE = 800; 
+let previewWidth = 0, previewHeight = 0;
 
 // Batch State
 let isBatchMode = false;
 let batchFiles = [];
 let batchIndex = 0;
-
-let previewWidth = 0, previewHeight = 0;
 
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
@@ -30,240 +20,53 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// --- WebGL Shader Engine (Full GPU Color Pipeline) ---
-const vsSource = `
-    attribute vec2 a_position;
-    attribute vec2 a_texCoord;
-    varying vec2 v_texCoord;
-    void main() { 
-        gl_Position = vec4(a_position, 0.0, 1.0); 
-        v_texCoord = a_texCoord; 
-    }
-`;
-
-const fsSource = `
-    precision mediump float;
-    varying vec2 v_texCoord;
-    uniform sampler2D u_image;
-    uniform vec2 u_texSize;
-
-    // Light & Tone Controls
-    uniform float u_exposure, u_contrast, u_highlights, u_shadows, u_whites, u_blacks;
-    uniform float u_temp, u_tint, u_vibrance, u_saturation;
-    uniform vec4 u_curves; // High, Light, Dark, Shadow
-
-    // 8-Channel HSL & Point Color
-    uniform vec3 u_hslRed, u_hslOrg, u_hslYel, u_hslGrn, u_hslAqu, u_hslBlu, u_hslPur, u_hslMag;
-    uniform vec3 u_pointCol, u_pointShift; 
-
-    // Color Grading
-    uniform vec3 u_gradShad, u_gradMid, u_gradHigh; 
-
-    // Presence & Effects
-    uniform float u_vignette, u_grain, u_time, u_sharpen, u_clarity, u_texture, u_blur, u_dehaze;
-
-    // Branchless, High-Precision HSL to RGB
-    vec3 hsl2rgb(vec3 c) {
-        vec3 rgb = clamp(abs(mod(c.x / 60.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-        return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
-    }
-
-    // High-Precision RGB to HSL
-    vec3 rgb2hsl(vec3 c) {
-        float maxC = max(max(c.r, c.g), c.b);
-        float minC = min(min(c.r, c.g), c.b);
-        float d = maxC - minC;
-        float l = (maxC + minC) * 0.5;
-        if (d == 0.0) return vec3(0.0, 0.0, l);
-        float s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC);
-        float h = 0.0;
-        if (maxC == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
-        else if (maxC == c.g) h = (c.b - c.r) / d + 2.0;
-        else h = (c.r - c.g) / d + 4.0;
-        return vec3(h * 60.0, s, l);
-    }
-
-    float rand(vec2 co) { 
-        return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453); 
-    }
-
-    vec3 applyGrading(float h, float s, float w) {
-        if (s <= 0.0) return vec3(0.0);
-        vec3 c = hsl2rgb(vec3(h, s / 100.0, 0.5));
-        return (c - 0.5) * w;
-    }
-
-    void main() {
-        vec4 baseColor = texture2D(u_image, v_texCoord);
-
-        // 1. Skin Blur
-        if (u_blur > 0.0) {
-            vec2 off = (u_blur * 2.0) / u_texSize;
-            baseColor += texture2D(u_image, v_texCoord + vec2(off.x, 0.0));
-            baseColor += texture2D(u_image, v_texCoord - vec2(off.x, 0.0));
-            baseColor += texture2D(u_image, v_texCoord + vec2(0.0, off.y));
-            baseColor += texture2D(u_image, v_texCoord - vec2(0.0, off.y));
-            baseColor += texture2D(u_image, v_texCoord + vec2(off.x, off.y));
-            baseColor += texture2D(u_image, v_texCoord - vec2(off.x, off.y));
-            baseColor += texture2D(u_image, v_texCoord + vec2(-off.x, off.y));
-            baseColor += texture2D(u_image, v_texCoord - vec2(-off.x, off.y));
-            baseColor /= 9.0;
-        }
-
-        vec3 rgb = baseColor.rgb;
-
-        // 2. Dehaze
-        if (u_dehaze != 0.0) {
-            float dAmt = u_dehaze / 100.0;
-            float darkFactor = 1.0 - ((rgb.r + rgb.g + rgb.b) / 3.0);
-            rgb.r -= dAmt * 0.15 * darkFactor;
-            rgb.g -= dAmt * 0.20 * darkFactor;
-            rgb.b -= dAmt * 0.30 * darkFactor;
-            rgb = clamp(rgb, 0.0, 1.0);
-        }
-
-        // 3. Sharpen, Texture & Clarity
-        float effectiveSharpen = u_sharpen + (u_clarity * 0.6) + (u_texture * 0.4);
-        if (effectiveSharpen > 0.0) {
-            float amt = effectiveSharpen / 200.0;
-            vec2 dx = vec2(1.0 / u_texSize.x, 0.0);
-            vec2 dy = vec2(0.0, 1.0 / u_texSize.y);
-            vec3 c1 = texture2D(u_image, v_texCoord - dx).rgb;
-            vec3 c2 = texture2D(u_image, v_texCoord + dx).rgb;
-            vec3 c3 = texture2D(u_image, v_texCoord - dy).rgb;
-            vec3 c4 = texture2D(u_image, v_texCoord + dy).rgb;
-            rgb = rgb * (1.0 + amt * 4.0) - (c1 + c2 + c3 + c4) * amt;
-        }
-
-        // 4. Exposure & White Balance
-        rgb *= (1.0 + (u_exposure / 100.0));
-        rgb.r += u_temp * 0.0035;
-        rgb.b -= u_temp * 0.0035;
-        rgb.g += u_tint * 0.0035;
-        rgb = clamp(rgb, 0.0, 1.0);
-
-        // 5. 8-Channel HSL & Selective Color
-        vec3 hsl = rgb2hsl(rgb);
-        float h = hsl.x;
-        vec3 hMod = vec3(0.0);
-
-        if (h > 345.0 || h <= 15.0) hMod = u_hslRed;
-        else if (h > 15.0 && h <= 45.0) hMod = u_hslOrg;
-        else if (h > 45.0 && h <= 75.0) hMod = u_hslYel;
-        else if (h > 75.0 && h <= 150.0) hMod = u_hslGrn;
-        else if (h > 150.0 && h <= 200.0) hMod = u_hslAqu;
-        else if (h > 200.0 && h <= 260.0) hMod = u_hslBlu;
-        else if (h > 260.0 && h <= 290.0) hMod = u_hslPur;
-        else if (h > 290.0 && h <= 345.0) hMod = u_hslMag;
-
-        // Point Color Eyedropper Shift
-        if (u_pointCol.x >= 0.0) {
-            float hDiff = min(abs(h - u_pointCol.x), 360.0 - abs(h - u_pointCol.x));
-            if (hDiff < 35.0) {
-                hMod += u_pointShift * (1.0 - (hDiff / 35.0));
-            }
-        }
-
-        if (hMod.x != 0.0 || hMod.y != 0.0 || hMod.z != 0.0) {
-            hsl.x = mod(hsl.x + hMod.x + 360.0, 360.0);
-            hsl.y = clamp(hsl.y + (hMod.y / 100.0), 0.0, 1.0);
-            hsl.z = clamp(hsl.z + (hMod.z / 100.0), 0.0, 1.0);
-            rgb = hsl2rgb(hsl);
-        }
-
-        // 6. Color Grading Wheels
-        float lum = dot(rgb, vec3(0.299, 0.587, 0.114));
-        if (u_gradShad.y > 0.0 && lum < 0.5) rgb += applyGrading(u_gradShad.x, u_gradShad.y, (0.5 - lum) / 0.5);
-        if (u_gradMid.y > 0.0) rgb += applyGrading(u_gradMid.x, u_gradMid.y, 1.0 - (abs(lum - 0.5) / 0.5));
-        if (u_gradHigh.y > 0.0 && lum >= 0.5) rgb += applyGrading(u_gradHigh.x, u_gradHigh.y, (lum - 0.5) / 0.5);
-
-        // 7. Parametric Tone Curves
-        float cLum = lum;
-        if (lum > 0.75) cLum += (u_curves.x / 100.0) * ((lum - 0.75) / 0.25);
-        else if (lum > 0.5) cLum += (u_curves.y / 100.0) * ((lum - 0.5) / 0.25);
-        else if (lum > 0.25) cLum += (u_curves.z / 100.0) * ((0.5 - lum) / 0.25);
-        else cLum += (u_curves.w / 100.0) * ((0.25 - lum) / 0.25);
-        
-        rgb *= (lum <= 0.001) ? 0.0 : (clamp(cLum, 0.0, 1.0) / lum);
-
-        // 8. Basic Tones & Clipping
-        lum = dot(rgb, vec3(0.299, 0.587, 0.114));
-        if (lum > 0.5) rgb += (u_highlights / 100.0) * ((lum - 0.5) / 0.5);
-        else rgb += (u_shadows / 100.0) * ((0.5 - lum) / 0.5);
-
-        rgb += (u_whites / 100.0);
-        rgb -= (u_blacks / 100.0);
-
-        // 9. Saturation & Vibrance
-        float maxC = max(max(rgb.r, rgb.g), rgb.b);
-        float minC = min(min(rgb.r, rgb.g), rgb.b);
-        float satMod = (u_saturation / 100.0) + ((u_vibrance / 100.0) * (1.0 - (maxC - minC)));
-        rgb = mix(vec3(lum), rgb, 1.0 + satMod);
-
-        // 10. Contrast (Full Dynamic Range)
-        float cFactor = (259.0 * (u_contrast + 255.0)) / (255.0 * (259.0 - u_contrast));
-        rgb = (rgb - 0.5) * cFactor + 0.5;
-
-        // 11. Vignette
-        if (u_vignette != 0.0) {
-            float dist = distance(v_texCoord, vec2(0.5, 0.5));
-            float vig = 1.0 + (u_vignette / 100.0) * pow(dist * 1.414, 2.0);
-            rgb *= clamp(vig, 0.0, 2.0);
-        }
-
-        // 12. Grain
-        if (u_grain > 0.0) {
-            rgb += (rand(v_texCoord + u_time) - 0.5) * (u_grain / 100.0);
-        }
-
-        gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), baseColor.a);
-    }
-`;
-
-function createShader(gl, type, source) {
-    const shader = gl.createShader(type);
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-    return shader;
+// --- Render Debouncing for Smoothness ---
+let renderFrameId = null;
+function queueRender() {
+    if (renderFrameId) cancelAnimationFrame(renderFrameId);
+    renderFrameId = requestAnimationFrame(() => {
+        renderPreview();
+        renderFrameId = null;
+    });
 }
 
-const program = gl.createProgram();
-gl.attachShader(program, createShader(gl, gl.VERTEX_SHADER, vsSource));
-gl.attachShader(program, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
-gl.linkProgram(program);
-gl.useProgram(program);
+// --- History System ---
+let history = [];
+let historyIndex = -1;
 
-const positionBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
-
-const texCoordBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,1, 1,1, 0,0, 0,0, 1,1, 1,0]), gl.STATIC_DRAW);
-
-const posLocation = gl.getAttribLocation(program, "a_position");
-const texLocation = gl.getAttribLocation(program, "a_texCoord");
-
-gl.enableVertexAttribArray(posLocation);
-gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-gl.vertexAttribPointer(posLocation, 2, gl.FLOAT, false, 0, 0);
-
-gl.enableVertexAttribArray(texLocation);
-gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-gl.vertexAttribPointer(texLocation, 2, gl.FLOAT, false, 0, 0);
-
-const glTexture = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, glTexture);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-function getLoc(name) { 
-    return gl.getUniformLocation(program, name); 
+function saveHistory() {
+    history = history.slice(0, historyIndex + 1);
+    history.push(JSON.parse(JSON.stringify(settings)));
+    historyIndex++;
+    updateHistoryButtons();
 }
 
-// --- UI Navigation ---
+function updateHistoryButtons() {
+    document.getElementById('undo-btn').disabled = historyIndex <= 0;
+    document.getElementById('redo-btn').disabled = historyIndex >= history.length - 1;
+}
+
+document.getElementById('undo-btn').addEventListener('click', () => {
+    if (historyIndex > 0) {
+        historyIndex--;
+        settings = JSON.parse(JSON.stringify(history[historyIndex]));
+        updateUI();
+        updateHistoryButtons();
+    }
+});
+
+document.getElementById('redo-btn').addEventListener('click', () => {
+    if (historyIndex < history.length - 1) {
+        historyIndex++;
+        settings = JSON.parse(JSON.stringify(history[historyIndex]));
+        updateUI();
+        updateHistoryButtons();
+    }
+});
+
+saveHistory();
+
+// --- UI Navigation & Collapse Logic ---
 const tabBtns = document.querySelectorAll('.tab-btn');
 const toolPanels = document.querySelectorAll('.tool-panel');
 const mainPanelsContainer = document.getElementById('main-panels-container');
@@ -282,13 +85,14 @@ tabBtns.forEach(btn => {
 
         tabBtns.forEach(t => t.classList.remove('active'));
         toolPanels.forEach(p => p.classList.remove('active'));
+        
         btn.classList.add('active');
         targetPanel.classList.add('active');
         mainPanelsContainer.style.display = 'block';
     });
 });
 
-// --- Sliders & Live Update ---
+// --- Sliders & Numeric Inputs ---
 const sliders = document.querySelectorAll('input[type="range"]');
 const numInputs = document.querySelectorAll('.val-input');
 
@@ -300,26 +104,18 @@ function updateUI() {
             if (numInp) numInp.value = settings[slider.id];
         }
     });
-    requestAnimationFrame(renderCurrent);
-}
-
-function renderCurrent() {
-    if (isVideo && videoSource.readyState >= 2) {
-        drawGPUFrame(videoSource, previewWidth, previewHeight);
-    } else if (originalImage) {
-        drawGPUFrame(originalImage, previewWidth, previewHeight);
-    }
+    queueRender();
 }
 
 sliders.forEach(slider => {
     slider.addEventListener('input', (e) => {
-        if (slider.id === 'vid-seek') return;
         const val = parseFloat(e.target.value);
         settings[e.target.id] = val;
         const numInp = document.getElementById(`num-${e.target.id}`);
         if (numInp) numInp.value = val;
-        requestAnimationFrame(renderCurrent);
+        queueRender(); 
     });
+    slider.addEventListener('change', () => { saveHistory(); });
 });
 
 numInputs.forEach(numInp => {
@@ -327,289 +123,145 @@ numInputs.forEach(numInp => {
     numInp.addEventListener('input', (e) => {
         let val = parseFloat(e.target.value);
         if (isNaN(val)) return;
+        const min = parseFloat(numInp.min), max = parseFloat(numInp.max);
+        if (!isNaN(min) && val < min) val = min;
+        if (!isNaN(max) && val > max) val = max;
+
         settings[settingKey] = val;
         const slider = document.getElementById(settingKey);
         if (slider) slider.value = val;
-        requestAnimationFrame(renderCurrent);
+        queueRender();
+    });
+
+    numInp.addEventListener('change', (e) => {
+        let val = parseFloat(e.target.value);
+        if (isNaN(val)) val = 0;
+        const min = parseFloat(numInp.min), max = parseFloat(numInp.max);
+        if (!isNaN(min) && val < min) val = min;
+        if (!isNaN(max) && val > max) val = max;
+        numInp.value = val;
+        settings[settingKey] = val;
+        updateUI();
+        saveHistory();
     });
 });
 
-// --- Direct GPU Frame Transfer ---
-function drawGPUFrame(sourceElement, width, height) {
-    if (!sourceElement) return;
-
-    glCanvas.width = width; 
-    glCanvas.height = height;
-    gl.viewport(0, 0, width, height);
-
-    gl.bindTexture(gl.TEXTURE_2D, glTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceElement);
-
-    // Uniform Bindings
-    gl.uniform2f(getLoc("u_texSize"), width, height);
-    gl.uniform1f(getLoc("u_exposure"), settings.exposure);
-    gl.uniform1f(getLoc("u_contrast"), settings.contrast);
-    gl.uniform1f(getLoc("u_highlights"), settings.highlights);
-    gl.uniform1f(getLoc("u_shadows"), settings.shadows);
-    gl.uniform1f(getLoc("u_whites"), settings.whites);
-    gl.uniform1f(getLoc("u_blacks"), settings.blacks);
-    gl.uniform1f(getLoc("u_temp"), settings.temp);
-    gl.uniform1f(getLoc("u_tint"), settings.tint);
-    gl.uniform1f(getLoc("u_vibrance"), settings.vibrance);
-    gl.uniform1f(getLoc("u_saturation"), settings.saturation);
-    gl.uniform1f(getLoc("u_vignette"), settings.vignette);
-    gl.uniform1f(getLoc("u_grain"), settings.grain);
-    gl.uniform1f(getLoc("u_sharpen"), settings.sharpen);
-    gl.uniform1f(getLoc("u_clarity"), settings.clarity);
-    gl.uniform1f(getLoc("u_texture"), settings.texture);
-    
-    // Skin Blur & Dehaze
-    let bRad = settings.blur > 0 ? 3.0 : (settings.noiseRed / 25.0);
-    gl.uniform1f(getLoc("u_blur"), settings.blur > 0 ? bRad * (settings.blur / 100.0) : (settings.noiseRed > 0 ? bRad : 0.0));
-    gl.uniform1f(getLoc("u_dehaze"), settings.dehaze);
-    gl.uniform1f(getLoc("u_time"), Math.random());
-    
-    gl.uniform4f(getLoc("u_curves"), settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
-    
-    // 8 Channels
-    gl.uniform3f(getLoc("u_hslRed"), settings.redH, settings.redS, settings.redL);
-    gl.uniform3f(getLoc("u_hslOrg"), settings.orgH, settings.orgS, settings.orgL);
-    gl.uniform3f(getLoc("u_hslYel"), settings.yelH, settings.yelS, settings.yelL);
-    gl.uniform3f(getLoc("u_hslGrn"), settings.grnH, settings.grnS, settings.grnL);
-    gl.uniform3f(getLoc("u_hslAqu"), settings.aquH, settings.aquS, settings.aquL);
-    gl.uniform3f(getLoc("u_hslBlu"), settings.bluH, settings.bluS, settings.bluL);
-    gl.uniform3f(getLoc("u_hslPur"), settings.purH, settings.purS, settings.purL);
-    gl.uniform3f(getLoc("u_hslMag"), settings.magH, settings.magS, settings.magL);
-    
-    gl.uniform3f(getLoc("u_pointCol"), settings.pickedH, settings.pickedS, settings.pickedL);
-    gl.uniform3f(getLoc("u_pointShift"), settings.pointHue, settings.pointSat, settings.pointLum);
-    
-    gl.uniform3f(getLoc("u_gradShad"), settings.gradShadH, settings.gradShadS, 0);
-    gl.uniform3f(getLoc("u_gradMid"), settings.gradMidH, settings.gradMidS, 0);
-    gl.uniform3f(getLoc("u_gradHigh"), settings.gradHighH, settings.gradHighS, 0);
-
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-}
-
-// --- File Handling ---
+// --- Upload & File Setup ---
 function loadFile(file) {
     if (!file) return;
-    
-    isVideo = file.type.startsWith('video/');
-    const url = URL.createObjectURL(file);
-    const MAX_PREVIEW_SIZE = isVideo ? 600 : 800;
-    
-    glCanvas.style.display = 'block';
-    document.getElementById('status').style.display = 'none';
-    document.getElementById('download-btn').disabled = false;
-    document.getElementById('auto-btn').disabled = false;
-
-    if (isVideo) {
-        originalImage = null;
-        videoControls.style.display = 'flex';
-        videoSource.src = url;
-        videoSource.pause();
-        isPlayingVideo = false;
-        vidPlayBtn.textContent = '▶️';
-
-        videoSource.onloadeddata = () => {
-            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(videoSource.videoWidth, videoSource.videoHeight));
-            previewWidth = Math.floor(videoSource.videoWidth * scale);
-            previewHeight = Math.floor(videoSource.videoHeight * scale);
-            videoSource.currentTime = 0.05; 
-        };
-
-        videoSource.onseeked = () => requestAnimationFrame(renderCurrent);
-    } else {
-        videoControls.style.display = 'none';
-        videoSource.pause();
+    const reader = new FileReader();
+    reader.onload = (event) => {
         originalImage = new Image();
         originalImage.onload = () => {
-            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(originalImage.naturalWidth, originalImage.naturalHeight));
-            previewWidth = Math.floor(originalImage.naturalWidth * scale);
-            previewHeight = Math.floor(originalImage.naturalHeight * scale);
-            requestAnimationFrame(renderCurrent);
+            const width = originalImage.naturalWidth || originalImage.width;
+            const height = originalImage.naturalHeight || originalImage.height;
+            const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
+            
+            previewWidth = Math.floor(width * scale);
+            previewHeight = Math.floor(height * scale);
+            
+            canvas.style.display = 'block';
+            document.getElementById('status').style.display = 'none';
+            document.getElementById('download-btn').disabled = false;
+            document.getElementById('auto-btn').disabled = false;
+            
+            setTimeout(() => {
+                queueRender();
+            }, 50);
         };
-        originalImage.src = url;
-    }
+        originalImage.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
 }
-
-// Video Scrubber & Playback
-function videoPlaybackLoop() {
-    if (!isPlayingVideo) return;
-    drawGPUFrame(videoSource, previewWidth, previewHeight);
-    vidSeek.value = (videoSource.currentTime / videoSource.duration) * 100;
-    
-    if (!videoSource.ended && !videoSource.paused) {
-        if ('requestVideoFrameCallback' in videoSource) {
-            videoSource.requestVideoFrameCallback(videoPlaybackLoop);
-        } else {
-            requestAnimationFrame(videoPlaybackLoop);
-        }
-    } else {
-        isPlayingVideo = false;
-        vidPlayBtn.textContent = '▶️';
-    }
-}
-
-vidPlayBtn.onclick = () => {
-    if (!isVideo) return;
-    if (isPlayingVideo) {
-        videoSource.pause();
-        isPlayingVideo = false;
-        vidPlayBtn.textContent = '▶️';
-    } else {
-        videoSource.play();
-        isPlayingVideo = true;
-        vidPlayBtn.textContent = '⏸️';
-        if ('requestVideoFrameCallback' in videoSource) {
-            videoSource.requestVideoFrameCallback(videoPlaybackLoop);
-        } else {
-            requestAnimationFrame(videoPlaybackLoop);
-        }
-    }
-};
-
-vidSeek.oninput = (e) => {
-    if (!isVideo) return;
-    videoSource.pause();
-    isPlayingVideo = false;
-    vidPlayBtn.textContent = '▶️';
-    videoSource.currentTime = (e.target.value / 100) * videoSource.duration;
-};
 
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('file-upload').addEventListener('change', (e) => loadFile(e.target.files[0]));
 
-// --- Complete Full Video Downloader ---
-async function exportCurrentFile() {
-    if (!originalImage && !isVideo) return;
-    const btn = document.getElementById(isBatchMode ? 'batch-download-btn' : 'download-btn');
-    const originalText = btn.textContent;
-    btn.textContent = '⏳';
+// --- Intuitive Auto Enhancement ---
+document.getElementById('auto-btn').addEventListener('click', () => {
+    if (!originalImage) return;
 
-    if (!isVideo) {
-        const width = originalImage.naturalWidth, height = originalImage.naturalHeight;
-        drawGPUFrame(originalImage, width, height);
-        
-        const a = document.createElement('a');
-        a.download = `photo_${Date.now()}.jpg`;
-        a.href = glCanvas.toDataURL('image/jpeg', 1.0);
-        a.click();
-        
-        drawGPUFrame(originalImage, previewWidth, previewHeight);
-        btn.textContent = originalText;
-    } else {
-        try {
-            videoSource.pause();
-            
-            // Reliable Rewind Promise with Timeout Fallback
-            await new Promise(resolve => {
-                let resolved = false;
-                const done = () => {
-                    if (!resolved) {
-                        resolved = true;
-                        videoSource.onseeked = null;
-                        resolve();
-                    }
-                };
-                videoSource.onseeked = done;
-                videoSource.currentTime = 0;
-                setTimeout(done, 350);
-            });
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = previewWidth; tempCanvas.height = previewHeight;
+    const tCtx = tempCanvas.getContext('2d');
+    tCtx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
 
-            // Target Full Native Resolution
-            const scale = Math.min(1, 1920 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
-            const eWidth = Math.floor(videoSource.videoWidth * scale);
-            const eHeight = Math.floor(videoSource.videoHeight * scale);
+    const rawData = tCtx.getImageData(0, 0, previewWidth, previewHeight).data;
+    const totalPixels = rawData.length / 4;
+    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0;
+    const histogram = new Array(256).fill(0);
 
-            drawGPUFrame(videoSource, eWidth, eHeight);
-
-            const stream = glCanvas.captureStream(30);
-            
-            // Audio Stream
-            try {
-                const audioStream = videoSource.captureStream ? videoSource.captureStream() : (videoSource.mozCaptureStream ? videoSource.mozCaptureStream() : null);
-                if (audioStream && audioStream.getAudioTracks().length > 0) {
-                    stream.addTrack(audioStream.getAudioTracks()[0]);
-                }
-            } catch (e) {
-                console.log('Audio track skipped:', e);
-            }
-
-            recordedChunks = [];
-            
-            let options = { videoBitsPerSecond: 12000000 };
-            let ext = 'mp4';
-            
-            if (MediaRecorder.isTypeSupported('video/mp4')) {
-                options.mimeType = 'video/mp4';
-            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-                options.mimeType = 'video/webm;codecs=vp9'; 
-                ext = 'webm';
-            } else {
-                options.mimeType = 'video/webm'; 
-                ext = 'webm';
-            }
-
-            mediaRecorder = new MediaRecorder(stream, options);
-            mediaRecorder.ondataavailable = (e) => { 
-                if (e.data && e.data.size > 0) recordedChunks.push(e.data); 
-            };
-
-            mediaRecorder.onstop = () => {
-                const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `video_grade_${Date.now()}.${ext}`;
-                a.click();
-                btn.textContent = originalText;
-                drawGPUFrame(videoSource, previewWidth, previewHeight);
-            };
-
-            // Hook completion directly to video finish
-            videoSource.onended = () => {
-                if (mediaRecorder && mediaRecorder.state === 'recording') {
-                    mediaRecorder.stop();
-                }
-            };
-
-            mediaRecorder.start(250);
-            await videoSource.play();
-
-            function recordRenderLoop() {
-                if (videoSource.ended || videoSource.paused) {
-                    if (videoSource.ended && mediaRecorder && mediaRecorder.state === 'recording') {
-                        mediaRecorder.stop();
-                    }
-                    return;
-                }
-                drawGPUFrame(videoSource, eWidth, eHeight);
-                requestAnimationFrame(recordRenderLoop);
-            }
-            requestAnimationFrame(recordRenderLoop);
-        } catch (err) {
-            alert("Export error: " + err.message);
-            btn.textContent = originalText;
-        }
+    for (let i = 0; i < rawData.length; i += 4) {
+        const r = rawData[i], g = rawData[i+1], b = rawData[i+2];
+        const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        sumR += r; sumG += g; sumB += b; sumLum += lum;
+        histogram[lum]++;
     }
-}
 
-document.getElementById('download-btn').onclick = () => exportCurrentFile();
+    const avgR = sumR / totalPixels, avgG = sumG / totalPixels, avgB = sumB / totalPixels, avgLum = sumLum / totalPixels;
 
-// --- Interactive Batch Queue Engine ---
+    let count = 0, p1 = 0, p99 = 255;
+    for (let i = 0; i < 256; i++) {
+        count += histogram[i];
+        if (p1 === 0 && count >= totalPixels * 0.01) p1 = i;
+        if (count >= totalPixels * 0.99) { p99 = i; break; }
+    }
+
+    let targetExp = (128 - avgLum) * 0.5;
+    settings.exposure = Math.round(Math.max(-40, Math.min(40, targetExp)));
+
+    let dynamicRange = p99 - p1;
+    if (dynamicRange < 180) settings.contrast = Math.round(Math.min(35, (180 - dynamicRange) * 0.35));
+    else if (dynamicRange > 240) settings.contrast = -10;
+    else settings.contrast = 5;
+
+    if (p99 > 240) settings.highlights = -25;
+    else if (p99 < 200) settings.highlights = 15;
+    else settings.highlights = 0;
+
+    if (p1 < 15) settings.shadows = 25;
+    else if (p1 > 40) settings.shadows = -10;
+    else settings.shadows = 0;
+
+    settings.whites = Math.round(Math.max(-20, Math.min(20, (240 - p99) * 0.3)));
+    settings.blacks = Math.round(Math.max(-20, Math.min(20, (p1 - 10) * 0.3)));
+
+    const avgGray = (avgR + avgG + avgB) / 3;
+    const rDiff = avgR - avgGray, bDiff = avgB - avgGray;
+    settings.temp = Math.round(Math.max(-30, Math.min(30, (bDiff - rDiff) * 0.4)));
+
+    const gDiff = avgG - ((avgR + avgB) / 2);
+    settings.tint = Math.round(Math.max(-25, Math.min(25, -gDiff * 0.5)));
+    settings.vibrance = 12;
+
+    updateUI();
+    saveHistory();
+});
+
+// --- Presets & Batch Processing Engine ---
+document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
+document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
+document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
+document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
+document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
+document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
+
+// Batch Queue Interaction
 const batchBtn = document.getElementById('batch-process-btn');
 const batchInput = document.getElementById('batch-file-input');
+
 batchBtn.onclick = () => batchInput.click();
 
 batchInput.addEventListener('change', (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
+    
     isBatchMode = true;
     batchFiles = files;
     batchIndex = 0;
+    
     document.getElementById('batch-ui').style.display = 'flex';
-    document.querySelector('.bottom-nav').style.display = 'none';
+    document.querySelector('.bottom-nav').style.display = 'none'; // hide normal nav
     loadBatchItem();
 });
 
@@ -626,7 +278,7 @@ function exitBatchMode() {
     isBatchMode = false;
     batchFiles = [];
     document.getElementById('batch-ui').style.display = 'none';
-    document.querySelector('.bottom-nav').style.display = 'flex';
+    document.querySelector('.bottom-nav').style.display = 'flex'; // restore normal nav
     batchInput.value = '';
     alert('Batch export complete! ✨');
 }
@@ -654,88 +306,293 @@ pickerBtn.addEventListener('click', () => {
     pickerTarget.style.display = isPicking ? "block" : "none";
 });
 
-const pickCanvas = document.createElement('canvas'); 
-pickCanvas.width = 1; 
-pickCanvas.height = 1;
-const pickCtx = pickCanvas.getContext('2d', { willReadFrequently: true });
+canvas.addEventListener('mousemove', (e) => {
+    if(!isPicking) return;
+    pickerTarget.style.left = `${e.clientX}px`;
+    pickerTarget.style.top = `${e.clientY}px`;
+});
 
-glCanvas.addEventListener('click', (e) => {
-    if (!isPicking) return;
-    const rect = glCanvas.getBoundingClientRect();
+canvas.addEventListener('click', (e) => {
+    if(!isPicking) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     
-    pickCtx.drawImage(isVideo ? videoSource : originalImage, 
-        (e.clientX - rect.left) * ((isVideo ? videoSource.videoWidth : originalImage.naturalWidth) / rect.width), 
-        (e.clientY - rect.top) * ((isVideo ? videoSource.videoHeight : originalImage.naturalHeight) / rect.height), 
-        1, 1, 0, 0, 1, 1);
-        
-    const pixel = pickCtx.getImageData(0, 0, 1, 1).data;
-    const maxC = Math.max(pixel[0], pixel[1], pixel[2]) / 255;
-    const minC = Math.min(pixel[0], pixel[1], pixel[2]) / 255;
-    const d = maxC - minC;
-    let h = 0;
+    const pixel = ctx.getImageData(x, y, 1, 1).data;
+    const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
     
-    if (d !== 0) {
-        if (maxC === pixel[0]/255) h = ((pixel[1]/255 - pixel[2]/255) / d) + (pixel[1]/255 < pixel[2]/255 ? 6 : 0);
-        else if (maxC === pixel[1]/255) h = ((pixel[2]/255 - pixel[0]/255) / d) + 2;
-        else h = ((pixel[0]/255 - pixel[1]/255) / d) + 4;
-        h /= 6;
-    }
-    
-    settings.pickedH = h * 360; 
-    settings.pickedS = 0; 
-    settings.pickedL = 0;
+    settings.pickedH = h; settings.pickedS = s; settings.pickedL = l;
     pickedColorDisplay.style.background = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
     
     isPicking = false;
     pickerBtn.textContent = "Activate Eyedropper 💉";
     pickerTarget.style.display = "none";
+    saveHistory();
+});
+
+// --- Math Functions ---
+function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    let max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0, l = (max + min) / 2; 
     
-    requestAnimationFrame(renderCurrent);
-});
-
-// Presets & History
-document.getElementById('copy-preset').onclick = () => { 
-    navigator.clipboard.writeText(JSON.stringify(settings)); 
-    alert('Preset copied! ✨'); 
-};
-document.getElementById('paste-preset').onclick = async () => { 
-    try { 
-        const text = await navigator.clipboard.readText(); 
-        settings = { ...settings, ...JSON.parse(text) }; 
-        updateUI(); 
-    } catch (e) { 
-        alert('Could not paste preset.'); 
+    if (max !== min) {
+        let d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        } 
+        h /= 6;
     }
-};
-document.getElementById('save-preset').onclick = () => { 
-    const a = document.createElement('a'); 
-    a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); 
-    a.download = "preset.json"; 
-    a.click(); 
-};
-document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
-document.getElementById('load-preset').addEventListener('change', (e) => { 
-    const file = e.target.files[0]; 
-    if (!file) return; 
-    const reader = new FileReader(); 
-    reader.onload = (event) => { 
-        settings = { ...settings, ...JSON.parse(event.target.result) }; 
-        updateUI(); 
-    }; 
-    reader.readAsText(file); 
-});
-document.getElementById('reset-btn').onclick = () => { 
-    Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); 
-    updateUI(); 
-};
-
-let history = []; 
-let historyIndex = -1;
-function saveHistory() { 
-    history = history.slice(0, historyIndex + 1); 
-    history.push(JSON.parse(JSON.stringify(settings))); 
-    historyIndex++; 
+    return [h * 360, s, l];
 }
-saveHistory();
+
+function hslToRgb(h, s, l) {
+    let r, g, b;
+    if (s === 0) {
+        r = g = b = l; 
+    } else {
+        let hue2rgb = (p, q, t) => {
+            if (t < 0) t += 1; if (t > 1) t -= 1;
+            if (t < 1/6) return p + (q - p) * 6 * t;
+            if (t < 1/2) return q;
+            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+            return p;
+        }
+        let q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        let p = 2 * l - q; h /= 360;
+        r = hue2rgb(p, q, h + 1/3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1/3);
+    }
+    return [r * 255, g * 255, b * 255];
+}
+
+function applyCurve(lum, high, light, dark, shadow) {
+    let mod = 0;
+    if (lum > 192) mod = high * ((lum - 192) / 63);
+    else if (lum > 128) mod = light * ((lum - 128) / 64);
+    else if (lum > 64) mod = dark * ((128 - lum) / 64);
+    else mod = shadow * ((64 - lum) / 64);
+    return lum + mod;
+}
+
+function getGradingColor(hue, sat, luminanceWeight) {
+    if (sat === 0) return [0, 0, 0];
+    const rgb = hslToRgb(hue, sat / 100, 0.5);
+    return [
+        (rgb[0] - 128) * luminanceWeight,
+        (rgb[1] - 128) * luminanceWeight,
+        (rgb[2] - 128) * luminanceWeight
+    ];
+}
+
+// --- Main Processing Engine (Your exact original CPU pixel logic) ---
+function processPixels(data, width, height, currentSettings = settings) {
+    const factor = (259 * (currentSettings.contrast + 255)) / (255 * (259 - currentSettings.contrast));
+    const cx = width / 2; const cy = height / 2;
+    const maxDist = Math.sqrt(cx*cx + cy*cy);
+
+    for (let i = 0; i < data.length; i += 4) {
+        let r = data[i], g = data[i + 1], b = data[i + 2];
+        let x = (i / 4) % width, y = Math.floor((i / 4) / width);
+
+        let exp = 1 + (currentSettings.exposure / 100);
+        r *= exp; g *= exp; b *= exp;
+        r += currentSettings.temp * 0.5; b -= currentSettings.temp * 0.5;
+        g += currentSettings.tint * 0.5;
+
+        if (currentSettings.dehaze !== 0) {
+            let dAmt = currentSettings.dehaze / 100;
+            let darkFactor = 1 - ((r+g+b)/3 / 255);
+            r -= dAmt * 20 * darkFactor; 
+            g -= dAmt * 25 * darkFactor; 
+            b -= dAmt * 40 * darkFactor; 
+        }
+
+        r = Math.max(0, Math.min(255, r));
+        g = Math.max(0, Math.min(255, g));
+        b = Math.max(0, Math.min(255, b));
+
+        let [h, s, l] = rgbToHsl(r, g, b);
+        let hMod = 0, sMod = 0, lMod = 0;
+
+        if (h > 345 || h <= 15) { hMod=currentSettings.redH; sMod=currentSettings.redS; lMod=currentSettings.redL; }
+        else if (h > 15 && h <= 45) { hMod=currentSettings.orgH; sMod=currentSettings.orgS; lMod=currentSettings.orgL; }
+        else if (h > 45 && h <= 75) { hMod=currentSettings.yelH; sMod=currentSettings.yelS; lMod=currentSettings.yelL; }
+        else if (h > 75 && h <= 150) { hMod=currentSettings.grnH; sMod=currentSettings.grnS; lMod=currentSettings.grnL; }
+        else if (h > 150 && h <= 200) { hMod=currentSettings.aquH; sMod=currentSettings.aquS; lMod=currentSettings.aquL; }
+        else if (h > 200 && h <= 260) { hMod=currentSettings.bluH; sMod=currentSettings.bluS; lMod=currentSettings.bluL; }
+        else if (h > 260 && h <= 290) { hMod=currentSettings.purH; sMod=currentSettings.purS; lMod=currentSettings.purL; }
+        else if (h > 290 && h <= 345) { hMod=currentSettings.magH; sMod=currentSettings.magS; lMod=currentSettings.magL; }
+
+        if (currentSettings.pickedH !== -1) {
+            let hueDist = Math.min(Math.abs(h - currentSettings.pickedH), 360 - Math.abs(h - currentSettings.pickedH));
+            if (hueDist < 30) {
+                let strength = 1 - (hueDist / 30);
+                hMod += currentSettings.pointHue * strength;
+                sMod += currentSettings.pointSat * strength;
+                lMod += currentSettings.pointLum * strength; 
+            }
+        }
+
+        if (hMod !== 0 || sMod !== 0 || lMod !== 0) {
+            h = (h + hMod + 360) % 360;
+            s = Math.max(0, Math.min(1, s + (sMod / 100)));
+            l = Math.max(0, Math.min(1, l + (lMod / 100))); 
+            [r, g, b] = hslToRgb(h, s, l);
+        }
+
+        let luminance = Math.max(0, Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b));
+        
+        if (currentSettings.gradShadS > 0 && luminance < 128) {
+            let weight = (128 - luminance) / 128;
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradShadH, currentSettings.gradShadS, weight);
+            r += cR; g += cG; b += cB;
+        }
+        if (currentSettings.gradMidS > 0) {
+            let weight = 1 - (Math.abs(luminance - 128) / 128);
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradMidH, currentSettings.gradMidS, weight);
+            r += cR; g += cG; b += cB;
+        }
+        if (currentSettings.gradHighS > 0 && luminance >= 128) {
+            let weight = (luminance - 128) / 128;
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradHighH, currentSettings.gradHighS, weight);
+            r += cR; g += cG; b += cB;
+        }
+
+        let cLum = applyCurve(luminance, currentSettings.curveHigh, currentSettings.curveLight, currentSettings.curveDark, currentSettings.curveShadow);
+        let cRatio = (luminance <= 0) ? 0 : (cLum / luminance);
+        r *= cRatio; g *= cRatio; b *= cRatio;
+
+        if (luminance > 128) {
+            let highMod = (luminance - 128) / 128;
+            r += currentSettings.highlights * highMod; g += currentSettings.highlights * highMod; b += currentSettings.highlights * highMod;
+        } else {
+            let shadMod = (128 - luminance) / 128;
+            r += currentSettings.shadows * shadMod; g += currentSettings.shadows * shadMod; b += currentSettings.shadows * shadMod;
+        }
+        r += currentSettings.whites; g += currentSettings.whites; b += currentSettings.whites;
+        r -= currentSettings.blacks; g -= currentSettings.blacks; b -= currentSettings.blacks;
+
+        if (currentSettings.clarity !== 0 || currentSettings.texture !== 0) {
+            let cAmt = currentSettings.clarity / 100;
+            let tAmt = currentSettings.texture / 100;
+            let midWeight = 1 - (Math.abs(luminance - 128) / 128); 
+            r += (r - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
+            g += (g - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
+            b += (b - luminance) * (cAmt + (tAmt * 0.5)) * midWeight;
+        }
+
+        let maxRGB = Math.max(r, g, b);
+        let avgRGB = (r + g + b) / 3;
+        let totalSat = (currentSettings.saturation / 100) + ((currentSettings.vibrance / 100) * (1 - (maxRGB - avgRGB) / 255));
+        r += (r - avgRGB) * totalSat; g += (g - avgRGB) * totalSat; b += (b - avgRGB) * totalSat;
+
+        r = factor * (r - 128) + 128; g = factor * (g - 128) + 128; b = factor * (b - 128) + 128;
+
+        if (currentSettings.vignette !== 0) {
+            let dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+            let vigAmt = (currentSettings.vignette / 100); 
+            let vigMod = 1 + (vigAmt * Math.pow(dist / maxDist, 2)); 
+            r *= vigMod; g *= vigMod; b *= vigMod;
+        }
+
+        if (currentSettings.grain > 0) {
+            let noise = (Math.random() - 0.5) * currentSettings.grain;
+            r += noise; g += noise; b += noise;
+        }
+
+        data[i] = Math.min(255, Math.max(0, r));
+        data[i+1] = Math.min(255, Math.max(0, g));
+        data[i+2] = Math.min(255, Math.max(0, b));
+    }
+}
+
+function applySharpen(ctx, w, h, amount) {
+    if (amount <= 0) return;
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data, copy = new Uint8ClampedArray(data);
+    const mix = amount / 200, w4 = w * 4;
+    for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+            let i = (y * w + x) * 4;
+            for (let c = 0; c < 3; c++) { 
+                let ic = i + c;
+                let val = (copy[ic] * 5) - copy[ic-4] - copy[ic+4] - copy[ic-w4] - copy[ic+w4];
+                data[ic] = copy[ic] + (val - copy[ic]) * mix;
+            }
+        }
+    }
+    ctx.putImageData(imgData, 0, 0);
+}
+
+function renderPreview() {
+    if (!originalImage) return;
+    canvas.width = previewWidth; canvas.height = previewHeight;
+    ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+
+    if (settings.blur > 0 || settings.noiseRed > 0) {
+        let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
+        ctx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100); 
+        ctx.filter = `blur(${bRad}px)`;
+        ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+        ctx.filter = 'none'; ctx.globalAlpha = 1.0; 
+    }
+
+    const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
+    processPixels(imgData.data, previewWidth, previewHeight, settings);
+    ctx.putImageData(imgData, 0, 0);
+    applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
+}
+
+// --- Download Engine for Photos ---
+async function exportCurrentFile() {
+    if (!originalImage) return;
+    const btnId = isBatchMode ? 'batch-download-btn' : 'download-btn';
+    const btn = document.getElementById(btnId);
+    const prevText = btn.textContent;
+    btn.textContent = '⏳'; 
+
+    return new Promise(resolve => {
+        setTimeout(() => {
+            const exportCanvas = document.createElement('canvas');
+            const width = originalImage.naturalWidth || originalImage.width;
+            const height = originalImage.naturalHeight || originalImage.height;
+            exportCanvas.width = width; exportCanvas.height = height;
+            const eCtx = exportCanvas.getContext('2d');
+            eCtx.drawImage(originalImage, 0, 0, width, height);
+
+            if (settings.blur > 0 || settings.noiseRed > 0) {
+                const previewScale = Math.min(1, 800 / Math.max(width, height));
+                const scaleRatio = 1 / previewScale;
+                const baseRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
+                const bRad = Math.max(1, baseRad * scaleRatio);
+        
+                eCtx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
+                eCtx.filter = `blur(${bRad}px)`;
+                eCtx.drawImage(originalImage, 0, 0, width, height);
+                eCtx.filter = 'none';
+                eCtx.globalAlpha = 1.0;
+            }
+
+            const imgData = eCtx.getImageData(0, 0, width, height);
+            processPixels(imgData.data, width, height, settings);
+            eCtx.putImageData(imgData, 0, 0);
+            if (settings.sharpen > 0) applySharpen(eCtx, width, height, settings.sharpen);
+
+            const a = document.createElement('a');
+            a.download = `edited_${Date.now()}.jpg`;
+            a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
+            a.click();
+            btn.textContent = prevText;
+            resolve();
+        }, 50);
+    });
+}
+
+document.getElementById('download-btn').onclick = () => exportCurrentFile();
 
 document.getElementById('panel-presets').classList.add('active');
