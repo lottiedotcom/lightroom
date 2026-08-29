@@ -32,7 +32,7 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// --- WebGL Shader Setup (Processes all HSL, Grading, Curves instantly on GPU) ---
+// --- WebGL Shader Setup ---
 const vsSource = `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -56,7 +56,7 @@ const fsSource = `
     uniform vec3 u_pointCol, u_pointShift; 
 
     // Grading
-    uniform vec3 u_gradShad, u_gradMid, u_gradHigh; // (Hue, Saturation, Weight internally)
+    uniform vec3 u_gradShad, u_gradMid, u_gradHigh; 
 
     // Effects
     uniform float u_vignette, u_grain, u_time, u_sharpen, u_clarity;
@@ -104,7 +104,7 @@ const fsSource = `
         vec4 color = texture2D(u_image, v_texCoord);
         vec3 rgb = color.rgb;
 
-        // Apply Sharpen (3x3 Fast Convolution)
+        // Apply Sharpen & Clarity
         if (u_sharpen > 0.0 || u_clarity != 0.0) {
             float amt = (u_sharpen / 200.0) + (u_clarity / 300.0);
             vec2 dx = vec2(1.0 / u_texSize.x, 0.0); vec2 dy = vec2(0.0, 1.0 / u_texSize.y);
@@ -297,7 +297,7 @@ function drawGPUFrame(sourceElement, width, height) {
     // Fast Pre-processing via 2D Canvas 
     canvas2d.width = width; canvas2d.height = height;
     
-    // 1. Draw the base image fully opaque first! (Fixes the transparent white-out bug)
+    // 1. Draw the base image fully opaque first
     ctx2d.globalAlpha = 1.0;
     ctx2d.filter = 'none';
     ctx2d.drawImage(sourceElement, 0, 0, width, height);
@@ -416,7 +416,11 @@ function videoPlaybackLoop() {
     vidSeek.value = (videoSource.currentTime / videoSource.duration) * 100;
     
     if (!videoSource.ended && !videoSource.paused) {
-        requestAnimationFrame(videoPlaybackLoop);
+        if ('requestVideoFrameCallback' in videoSource) {
+            videoSource.requestVideoFrameCallback(videoPlaybackLoop);
+        } else {
+            requestAnimationFrame(videoPlaybackLoop);
+        }
     } else {
         isPlayingVideo = false;
         vidPlayBtn.textContent = '▶️';
@@ -433,7 +437,11 @@ vidPlayBtn.onclick = () => {
         videoSource.play();
         isPlayingVideo = true;
         vidPlayBtn.textContent = '⏸️';
-        requestAnimationFrame(videoPlaybackLoop);
+        if ('requestVideoFrameCallback' in videoSource) {
+            videoSource.requestVideoFrameCallback(videoPlaybackLoop);
+        } else {
+            requestAnimationFrame(videoPlaybackLoop);
+        }
     }
 };
 
@@ -448,7 +456,7 @@ vidSeek.oninput = (e) => {
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('file-upload').addEventListener('change', (e) => loadFile(e.target.files[0]));
 
-// --- Video & Photo Downloader (MediaRecorder for video) ---
+// --- Video & Photo Downloader (High Quality Export Engine) ---
 async function exportCurrentFile() {
     if (!originalImage && !isVideo) return;
     const btn = document.getElementById(isBatchMode ? 'batch-download-btn' : 'download-btn');
@@ -456,13 +464,13 @@ async function exportCurrentFile() {
     btn.textContent = '⏳';
 
     if (!isVideo) {
-        // High Res Photo Export
+        // High Res Photo Export (Max Quality 1.0)
         const width = originalImage.naturalWidth, height = originalImage.naturalHeight;
         drawGPUFrame(originalImage, width, height);
         
         const a = document.createElement('a');
         a.download = `photo_${Date.now()}.jpg`;
-        a.href = glCanvas.toDataURL('image/jpeg', 0.95);
+        a.href = glCanvas.toDataURL('image/jpeg', 1.0);
         a.click();
         
         // Restore Preview Resolution
@@ -474,26 +482,50 @@ async function exportCurrentFile() {
         videoSource.currentTime = 0;
         await new Promise(r => { videoSource.onseeked = r; });
 
-        // Limit export width to 720p maximum to ensure mobile codecs don't crash
-        const scale = Math.min(1, 1280 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
+        // Allow up to 1080p export for High Quality clarity
+        const scale = Math.min(1, 1920 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
         const eWidth = Math.floor(videoSource.videoWidth * scale);
         const eHeight = Math.floor(videoSource.videoHeight * scale);
 
         drawGPUFrame(videoSource, eWidth, eHeight);
 
+        // Capture at stable 30fps
         const stream = glCanvas.captureStream(30);
+        
+        // Mux original Audio back into the recording
+        try {
+            const audioStream = videoSource.captureStream ? videoSource.captureStream() : videoSource.mozCaptureStream ? videoSource.mozCaptureStream() : null;
+            if (audioStream && audioStream.getAudioTracks().length > 0) {
+                stream.addTrack(audioStream.getAudioTracks()[0]);
+            }
+        } catch(e) { console.log('Audio capture unsupported on this browser', e); }
+
         recordedChunks = [];
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        
+        // Setup High Bitrate (10 Mbps) & proper codec extension fallback to prevent corruption
+        let options = { videoBitsPerSecond: 10000000 }; 
+        let ext = 'webm';
+        
+        if (MediaRecorder.isTypeSupported('video/mp4')) {
+            options.mimeType = 'video/mp4';
+            ext = 'mp4';
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+            options.mimeType = 'video/webm;codecs=vp9';
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+            options.mimeType = 'video/webm;codecs=vp8';
+        }
+
+        mediaRecorder = new MediaRecorder(stream, options);
 
         mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 0) recordedChunks.push(e.data);
         };
 
         mediaRecorder.onstop = () => {
-            const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+            const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `video_${Date.now()}.mp4`;
+            a.download = `video_grade_${Date.now()}.${ext}`;
             a.click();
             btn.textContent = originalText;
             drawGPUFrame(videoSource, previewWidth, previewHeight); // Restore sizing
@@ -502,15 +534,26 @@ async function exportCurrentFile() {
         mediaRecorder.start();
         videoSource.play();
 
+        // requestVideoFrameCallback perfectly syncs drawing to prevent choppiness
         function recordRenderLoop() {
             if (videoSource.ended || videoSource.paused) {
-                mediaRecorder.stop();
+                if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
                 return;
             }
             drawGPUFrame(videoSource, eWidth, eHeight);
+            
+            if ('requestVideoFrameCallback' in videoSource) {
+                videoSource.requestVideoFrameCallback(recordRenderLoop);
+            } else {
+                requestAnimationFrame(recordRenderLoop);
+            }
+        }
+        
+        if ('requestVideoFrameCallback' in videoSource) {
+            videoSource.requestVideoFrameCallback(recordRenderLoop);
+        } else {
             requestAnimationFrame(recordRenderLoop);
         }
-        requestAnimationFrame(recordRenderLoop);
     }
 }
 
