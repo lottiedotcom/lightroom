@@ -24,20 +24,13 @@
         </header>
 
         <main class="preview-area" id="preview-container">
-            <canvas id="gl-canvas"></canvas>
-            <video id="video-source" playsinline preload="auto" crossorigin="anonymous" hidden></video>
-            
-            <!-- Video Playback Control Bar -->
-            <div id="video-controls" style="display: none; position: absolute; bottom: 20px; background: rgba(255,255,255,0.95); padding: 8px 16px; border-radius: 20px; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); z-index: 5;">
-                <button id="vid-play-btn" class="icon-btn" style="font-size: 1.2rem; padding: 0;">▶️</button>
-                <input type="range" id="vid-seek" min="0" max="100" value="0" style="width: 150px;">
-            </div>
-
+            <canvas id="canvas"></canvas>
             <div id="status">
-                <p>Upload an image or video to start 🎀</p>
-                <button id="upload-btn" class="btn blue-btn" style="margin-top: 1rem;">Choose File</button>
-                <input type="file" id="file-upload" accept="image/*,video/*" hidden>
+                <p>Upload an image to start 🎀</p>
+                <button id="upload-btn" class="btn blue-btn">Choose Photo</button>
+                <input type="file" id="file-upload" accept="image/*" hidden>
             </div>
+            <!-- Target overlay for Point Color -->
             <div id="picker-target" style="display: none;">🎯</div>
         </main>
 
@@ -55,7 +48,7 @@
                 </div>
                 
                 <button id="batch-process-btn" class="btn blue-btn" style="margin-top: 0.8rem;">📦 Batch Apply & Export</button>
-                <input type="file" id="batch-file-input" accept="image/*,video/*" multiple hidden>
+                <input type="file" id="batch-file-input" accept="image/*" multiple hidden>
                 
                 <button id="reset-btn" class="btn main-btn">Reset All Settings</button>
             </div>
@@ -93,6 +86,7 @@
             <!-- Point Color & 8-Channel HSL -->
             <div id="panel-hsl" class="tool-panel">
                 <div class="panel-header">Mixer & Point Color</div>
+                
                 <div style="background: #fff0f5; padding: 1rem; border-radius: 12px; margin-bottom: 1.5rem;">
                     <h4 style="margin-top:0;">Point Color</h4>
                     <button id="picker-btn" class="btn blue-btn" style="margin-bottom: 1rem;">Activate Eyedropper 💉</button>
@@ -102,35 +96,41 @@
                     <div class="slider-group"><div class="slider-label"><span>Shift Luminance</span><input type="number" class="val-input" id="num-pointLum" min="-100" max="100" value="0"></div><input type="range" id="pointLum" min="-100" max="100" value="0"></div>
                 </div>
 
-                <!-- 8-Channel Sliders -->
                 <h4 style="color: #ff6b6b;">Red</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-redH" min="-100" max="100" value="0"></div><input type="range" id="redH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-redS" min="-100" max="100" value="0"></div><input type="range" id="redS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-redL" min="-100" max="100" value="0"></div><input type="range" id="redL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #ffa502;">Orange</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-orgH" min="-100" max="100" value="0"></div><input type="range" id="orgH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-orgS" min="-100" max="100" value="0"></div><input type="range" id="orgS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-orgL" min="-100" max="100" value="0"></div><input type="range" id="orgL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #eccc68;">Yellow</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-yelH" min="-100" max="100" value="0"></div><input type="range" id="yelH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-yelS" min="-100" max="100" value="0"></div><input type="range" id="yelS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-yelL" min="-100" max="100" value="0"></div><input type="range" id="yelL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #2ed573;">Green</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-grnH" min="-100" max="100" value="0"></div><input type="range" id="grnH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-grnS" min="-100" max="100" value="0"></div><input type="range" id="grnS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-grnL" min="-100" max="100" value="0"></div><input type="range" id="grnL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #7bed9f;">Aqua</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-aquH" min="-100" max="100" value="0"></div><input type="range" id="aquH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-aquS" min="-100" max="100" value="0"></div><input type="range" id="aquS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-aquL" min="-100" max="100" value="0"></div><input type="range" id="aquL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #1e90ff;">Blue</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-bluH" min="-100" max="100" value="0"></div><input type="range" id="bluH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-bluS" min="-100" max="100" value="0"></div><input type="range" id="bluS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-bluL" min="-100" max="100" value="0"></div><input type="range" id="bluL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #9c88ff;">Purple</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-purH" min="-100" max="100" value="0"></div><input type="range" id="purH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-purS" min="-100" max="100" value="0"></div><input type="range" id="purS" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Lum</span><input type="number" class="val-input" id="num-purL" min="-100" max="100" value="0"></div><input type="range" id="purL" min="-100" max="100" value="0"></div>
+
                 <h4 style="color: #ff4757;">Magenta</h4>
                 <div class="slider-group"><div class="slider-label"><span>Hue</span><input type="number" class="val-input" id="num-magH" min="-100" max="100" value="0"></div><input type="range" id="magH" min="-100" max="100" value="0"></div>
                 <div class="slider-group"><div class="slider-label"><span>Sat</span><input type="number" class="val-input" id="num-magS" min="-100" max="100" value="0"></div><input type="range" id="magS" min="-100" max="100" value="0"></div>
