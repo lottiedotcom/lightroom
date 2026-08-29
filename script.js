@@ -290,19 +290,29 @@ numInputs.forEach(numInp => {
     });
 });
 
-// --- GPU Rendering Engine ---
+// --- GPU Rendering Engine (WITH FIXED BASE OPACITY) ---
 function drawGPUFrame(sourceElement, width, height) {
     if (!sourceElement) return;
 
-    // Fast Pre-processing via 2D Canvas (For Blur/Dehaze which are hard on single-pass shaders)
+    // Fast Pre-processing via 2D Canvas 
     canvas2d.width = width; canvas2d.height = height;
+    
+    // 1. Draw the base image fully opaque first! (Fixes the transparent white-out bug)
+    ctx2d.globalAlpha = 1.0;
+    ctx2d.filter = 'none';
+    ctx2d.drawImage(sourceElement, 0, 0, width, height);
+    
+    // 2. Draw the blur overlay
     if (settings.blur > 0 || settings.noiseRed > 0) {
         let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
         ctx2d.filter = `blur(${bRad}px)`;
         ctx2d.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
+        ctx2d.drawImage(sourceElement, 0, 0, width, height);
     }
-    ctx2d.drawImage(sourceElement, 0, 0, width, height);
-    ctx2d.filter = 'none'; ctx2d.globalAlpha = 1.0;
+    
+    // Reset canvas context
+    ctx2d.filter = 'none'; 
+    ctx2d.globalAlpha = 1.0;
     
     // Draw Dehaze overlay map before GPU
     if (settings.dehaze > 0) {
@@ -566,11 +576,7 @@ pickerBtn.addEventListener('click', () => {
 glCanvas.addEventListener('click', (e) => {
     if(!isPicking) return;
     const rect = glCanvas.getBoundingClientRect();
-    const scaleX = glCanvas.width / rect.width;
-    const scaleY = glCanvas.height / rect.height;
     
-    // In WebGL, reading a pixel requires reading the GPU buffer directly. To stay synchronous and fast, 
-    // we read it safely from the underlying 2D image since colors shift dynamically anyway.
     const x = (e.clientX - rect.left) * (canvas2d.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas2d.height / rect.height);
     
