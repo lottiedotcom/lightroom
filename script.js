@@ -1,8 +1,13 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const videoSource = document.getElementById('video-source');
+const videoControls = document.getElementById('video-controls');
+const vidPlayBtn = document.getElementById('vid-play-btn');
+const vidSeek = document.getElementById('vid-seek');
+
 let originalImage = null;
 let isVideo = false;
+let isPlayingVideo = false;
 
 // Batch State
 let isBatchMode = false;
@@ -147,7 +152,7 @@ numInputs.forEach(numInp => {
     });
 });
 
-// --- File Handling Core (No Auto-Looping) ---
+// --- File Handling Core (Controlled Video Loading) ---
 function loadFile(file) {
     if (!file) return;
     
@@ -161,10 +166,13 @@ function loadFile(file) {
     document.getElementById('auto-btn').disabled = false;
 
     if (isVideo) {
+        originalImage = null;
+        videoControls.style.display = 'flex';
         videoSource.src = url;
         videoSource.pause();
-        videoSource.removeAttribute('loop');
-        
+        isPlayingVideo = false;
+        vidPlayBtn.textContent = '▶️';
+
         videoSource.onloadeddata = () => {
             const width = videoSource.videoWidth;
             const height = videoSource.videoHeight;
@@ -174,14 +182,15 @@ function loadFile(file) {
             canvas.width = previewWidth;
             canvas.height = previewHeight;
             
-            // Seek to first frame cleanly without auto-playing/looping
-            videoSource.currentTime = 0.1;
+            videoSource.currentTime = 0.1; // Seek to first frame cleanly
         };
-        
+
         videoSource.onseeked = () => {
             queueRender();
         };
     } else {
+        videoControls.style.display = 'none';
+        videoSource.pause();
         originalImage = new Image();
         originalImage.onload = () => {
             const width = originalImage.naturalWidth || originalImage.width;
@@ -195,6 +204,42 @@ function loadFile(file) {
             setTimeout(() => { queueRender(); }, 50);
         };
         originalImage.src = url;
+    }
+}
+
+// Video Play/Pause & Scrubber Handling
+vidPlayBtn.onclick = () => {
+    if (!isVideo) return;
+    if (isPlayingVideo) {
+        videoSource.pause();
+        isPlayingVideo = false;
+        vidPlayBtn.textContent = '▶️';
+    } else {
+        videoSource.play();
+        isPlayingVideo = true;
+        vidPlayBtn.textContent = '⏸️';
+        trackVideoPlayback();
+    }
+};
+
+vidSeek.oninput = (e) => {
+    if (!isVideo) return;
+    videoSource.pause();
+    isPlayingVideo = false;
+    vidPlayBtn.textContent = '▶️';
+    const time = (e.target.value / 100) * videoSource.duration;
+    videoSource.currentTime = time;
+};
+
+function trackVideoPlayback() {
+    if (!isPlayingVideo) return;
+    queueRender();
+    if (!videoSource.ended && !videoSource.paused) {
+        vidSeek.value = (videoSource.currentTime / videoSource.duration) * 100;
+        requestAnimationFrame(trackVideoPlayback);
+    } else {
+        isPlayingVideo = false;
+        vidPlayBtn.textContent = '▶️';
     }
 }
 
@@ -214,14 +259,9 @@ document.getElementById('auto-btn').addEventListener('click', () => {
 
     const rawData = tCtx.getImageData(0, 0, previewWidth, previewHeight).data;
     const totalPixels = rawData.length / 4;
-    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0;
-    const histogram = new Array(256).fill(0);
-
+    let sumLum = 0;
     for (let i = 0; i < rawData.length; i += 4) {
-        const r = rawData[i], g = rawData[i+1], b = rawData[i+2];
-        const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-        sumR += r; sumG += g; sumB += b; sumLum += lum;
-        histogram[lum]++;
+        sumLum += Math.round(0.299 * rawData[i] + 0.587 * rawData[i+1] + 0.114 * rawData[i+2]);
     }
 
     const avgLum = sumLum / totalPixels;
@@ -326,6 +366,7 @@ function rgbToHsl(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     let max = Math.max(r, g, b), min = Math.min(r, g, b);
     let h = 0, s = 0, l = (max + min) / 2; 
+    
     if (max !== min) {
         let d = max - min;
         s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -370,7 +411,11 @@ function applyCurve(lum, high, light, dark, shadow) {
 function getGradingColor(hue, sat, luminanceWeight) {
     if (sat === 0) return [0, 0, 0];
     const rgb = hslToRgb(hue, sat / 100, 0.5);
-    return [(rgb[0] - 128) * luminanceWeight, (rgb[1] - 128) * luminanceWeight, (rgb[2] - 128) * luminanceWeight];
+    return [
+        (rgb[0] - 128) * luminanceWeight,
+        (rgb[1] - 128) * luminanceWeight,
+        (rgb[2] - 128) * luminanceWeight
+    ];
 }
 
 function processPixels(data, width, height, currentSettings = settings) {
@@ -387,18 +432,106 @@ function processPixels(data, width, height, currentSettings = settings) {
         r += currentSettings.temp * 0.5; b -= currentSettings.temp * 0.5;
         g += currentSettings.tint * 0.5;
 
+        if (currentSettings.dehaze !== 0) {
+            let dAmt = currentSettings.dehaze / 100;
+            let darkFactor = 1 - ((r+g+b)/3 / 255);
+            r -= dAmt * 20 * darkFactor; 
+            g -= dAmt * 25 * darkFactor; 
+            b -= dAmt * 40 * darkFactor; 
+        }
+
         r = Math.max(0, Math.min(255, r));
         g = Math.max(0, Math.min(255, g));
         b = Math.max(0, Math.min(255, b));
 
         let [h, s, l] = rgbToHsl(r, g, b);
+        let hMod = 0, sMod = 0, lMod = 0;
+
+        if (h > 345 || h <= 15) { hMod=currentSettings.redH; sMod=currentSettings.redS; lMod=currentSettings.redL; }
+        else if (h > 15 && h <= 45) { hMod=currentSettings.orgH; sMod=currentSettings.orgS; lMod=currentSettings.orgL; }
+        else if (h > 45 && h <= 75) { hMod=currentSettings.yelH; sMod=currentSettings.yelS; lMod=currentSettings.yelL; }
+        else if (h > 75 && h <= 150) { hMod=currentSettings.grnH; sMod=currentSettings.grnS; lMod=currentSettings.grnL; }
+        else if (h > 150 && h <= 200) { hMod=currentSettings.aquH; sMod=currentSettings.aquS; lMod=currentSettings.aquL; }
+        else if (h > 200 && h <= 260) { hMod=currentSettings.bluH; sMod=currentSettings.bluS; lMod=currentSettings.bluL; }
+        else if (h > 260 && h <= 290) { hMod=currentSettings.purH; sMod=currentSettings.purS; lMod=currentSettings.purL; }
+        else if (h > 290 && h <= 345) { hMod=currentSettings.magH; sMod=currentSettings.magS; lMod=currentSettings.magL; }
+
+        if (currentSettings.pickedH !== -1) {
+            let hueDist = Math.min(Math.abs(h - currentSettings.pickedH), 360 - Math.abs(h - currentSettings.pickedH));
+            if (hueDist < 30) {
+                let strength = 1 - (hueDist / 30);
+                hMod += currentSettings.pointHue * strength;
+                sMod += currentSettings.pointSat * strength;
+                lMod += currentSettings.pointLum * strength; 
+            }
+        }
+
+        if (hMod !== 0 || sMod !== 0 || lMod !== 0) {
+            h = (h + hMod + 360) % 360;
+            s = Math.max(0, Math.min(1, s + (sMod / 100)));
+            l = Math.max(0, Math.min(1, l + (lMod / 100))); 
+            [r, g, b] = hslToRgb(h, s, l);
+        }
+
         let luminance = Math.max(0, Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b));
+        
+        if (currentSettings.gradShadS > 0 && luminance < 128) {
+            let weight = (128 - luminance) / 128;
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradShadH, currentSettings.gradShadS, weight);
+            r += cR; g += cG; b += cB;
+        }
+        if (currentSettings.gradMidS > 0) {
+            let weight = 1 - (Math.abs(luminance - 128) / 128);
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradMidH, currentSettings.gradMidS, weight);
+            r += cR; g += cG; b += cB;
+        }
+        if (currentSettings.gradHighS > 0 && luminance >= 128) {
+            let weight = (luminance - 128) / 128;
+            let [cR, cG, cB] = getGradingColor(currentSettings.gradHighH, currentSettings.gradHighS, weight);
+            r += cR; g += cG; b += cB;
+        }
 
         let cLum = applyCurve(luminance, currentSettings.curveHigh, currentSettings.curveLight, currentSettings.curveDark, currentSettings.curveShadow);
         let cRatio = (luminance <= 0) ? 0 : (cLum / luminance);
         r *= cRatio; g *= cRatio; b *= cRatio;
 
+        if (luminance > 128) {
+            let highMod = (luminance - 128) / 128;
+            r += currentSettings.highlights * highMod; g += currentSettings.highlights * highMod; b += currentSettings.highlights * highMod;
+        } else {
+            let shadMod = (128 - luminance) / 128;
+            r += currentSettings.shadows * shadMod; g += currentSettings.shadows * shadMod; b += currentSettings.shadows * shadMod;
+        }
+        r += currentSettings.whites; g += currentSettings.whites; b += currentSettings.whites;
+        r -= currentSettings.blacks; g -= currentSettings.blacks; b -= currentSettings.blacks;
+
+        if (currentSettings.clarity !== 0 || currentSettings.texture !== 0) {
+            let cAmt = currentSettings.clarity / 100;
+            let tAmt = currentSettings.texture / 100;
+            let midWeight = 1 - (Math.abs(luminance - 128) / 128); 
+            r += (r - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
+            g += (g - luminance) * (cAmt + (tAmt * 0.5)) * midWeight; 
+            b += (b - luminance) * (cAmt + (tAmt * 0.5)) * midWeight;
+        }
+
+        let maxRGB = Math.max(r, g, b);
+        let avgRGB = (r + g + b) / 3;
+        let totalSat = (currentSettings.saturation / 100) + ((currentSettings.vibrance / 100) * (1 - (maxRGB - avgRGB) / 255));
+        r += (r - avgRGB) * totalSat; g += (g - avgRGB) * totalSat; b += (b - avgRGB) * totalSat;
+
         r = factor * (r - 128) + 128; g = factor * (g - 128) + 128; b = factor * (b - 128) + 128;
+
+        if (currentSettings.vignette !== 0) {
+            let dist = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+            let vigAmt = (currentSettings.vignette / 100); 
+            let vigMod = 1 + (vigAmt * Math.pow(dist / maxDist, 2)); 
+            r *= vigMod; g *= vigMod; b *= vigMod;
+        }
+
+        if (currentSettings.grain > 0) {
+            let noise = (Math.random() - 0.5) * currentSettings.grain;
+            r += noise; g += noise; b += noise;
+        }
 
         data[i] = Math.min(255, Math.max(0, r));
         data[i+1] = Math.min(255, Math.max(0, g));
@@ -425,23 +558,42 @@ function applySharpen(ctx, w, h, amount) {
 }
 
 function renderPreview() {
-    if (isVideo) {
+    if (isVideo && videoSource.readyState >= 2) {
         ctx.drawImage(videoSource, 0, 0, previewWidth, previewHeight);
+        
+        if (settings.blur > 0 || settings.noiseRed > 0) {
+            let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
+            ctx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100); 
+            ctx.filter = `blur(${bRad}px)`;
+            ctx.drawImage(videoSource, 0, 0, previewWidth, previewHeight);
+            ctx.filter = 'none'; ctx.globalAlpha = 1.0; 
+        }
+
         const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
         processPixels(imgData.data, previewWidth, previewHeight, settings);
         ctx.putImageData(imgData, 0, 0);
+        applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
     } else if (originalImage) {
         ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+        
+        if (settings.blur > 0 || settings.noiseRed > 0) {
+            let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
+            ctx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100); 
+            ctx.filter = `blur(${bRad}px)`;
+            ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+            ctx.filter = 'none'; ctx.globalAlpha = 1.0; 
+        }
+
         const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
         processPixels(imgData.data, previewWidth, previewHeight, settings);
         ctx.putImageData(imgData, 0, 0);
+        applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
     }
 }
 
-// --- Safe Frame-by-Frame Video / Image Export ---
+// --- Export Function (Images & Video Frame Snaps) ---
 async function exportCurrentFile() {
     if (!originalImage && !isVideo) return;
-    
     const btnId = isBatchMode ? 'batch-download-btn' : 'download-btn';
     const btn = document.getElementById(btnId);
     const prevText = btn.textContent;
@@ -456,9 +608,24 @@ async function exportCurrentFile() {
                 exportCanvas.width = width; exportCanvas.height = height;
                 const eCtx = exportCanvas.getContext('2d');
                 eCtx.drawImage(originalImage, 0, 0, width, height);
+
+                if (settings.blur > 0 || settings.noiseRed > 0) {
+                    const previewScale = Math.min(1, 800 / Math.max(width, height));
+                    const scaleRatio = 1 / previewScale;
+                    const baseRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
+                    const bRad = Math.max(1, baseRad * scaleRatio);
+            
+                    eCtx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
+                    eCtx.filter = `blur(${bRad}px)`;
+                    eCtx.drawImage(originalImage, 0, 0, width, height);
+                    eCtx.filter = 'none';
+                    eCtx.globalAlpha = 1.0;
+                }
+
                 const imgData = eCtx.getImageData(0, 0, width, height);
                 processPixels(imgData.data, width, height, settings);
                 eCtx.putImageData(imgData, 0, 0);
+                if (settings.sharpen > 0) applySharpen(eCtx, width, height, settings.sharpen);
 
                 const a = document.createElement('a');
                 a.download = `edited_${Date.now()}.jpg`;
@@ -467,22 +634,36 @@ async function exportCurrentFile() {
                 btn.textContent = prevText;
                 resolve();
             } else {
-                // For video export safety on mobile: snapshot the current paused frame cleanly
+                // Export current paused frame as a high-res styled photo snapshot
                 const exportCanvas = document.createElement('canvas');
                 exportCanvas.width = videoSource.videoWidth;
                 exportCanvas.height = videoSource.videoHeight;
                 const eCtx = exportCanvas.getContext('2d');
                 eCtx.drawImage(videoSource, 0, 0, exportCanvas.width, exportCanvas.height);
+
+                if (settings.blur > 0 || settings.noiseRed > 0) {
+                    const previewScale = Math.min(1, 800 / Math.max(exportCanvas.width, exportCanvas.height));
+                    const scaleRatio = 1 / previewScale;
+                    const baseRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
+                    const bRad = Math.max(1, baseRad * scaleRatio);
+            
+                    eCtx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
+                    eCtx.filter = `blur(${bRad}px)`;
+                    eCtx.drawImage(videoSource, 0, 0, exportCanvas.width, exportCanvas.height);
+                    eCtx.filter = 'none';
+                    eCtx.globalAlpha = 1.0;
+                }
+
                 const imgData = eCtx.getImageData(0, 0, exportCanvas.width, exportCanvas.height);
                 processPixels(imgData.data, exportCanvas.width, exportCanvas.height, settings);
                 eCtx.putImageData(imgData, 0, 0);
+                if (settings.sharpen > 0) applySharpen(eCtx, exportCanvas.width, exportCanvas.height, settings.sharpen);
 
                 const a = document.createElement('a');
-                a.download = `edited_frame_${Date.now()}.jpg`;
+                a.download = `video_grade_frame_${Date.now()}.jpg`;
                 a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
                 a.click();
                 btn.textContent = prevText;
-                alert("Video frame processed and saved as an edited high-res still! ✨");
                 resolve();
             }
         }, 50);
