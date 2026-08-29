@@ -1,7 +1,5 @@
 const glCanvas = document.getElementById('gl-canvas');
 const gl = glCanvas.getContext('webgl', { preserveDrawingBuffer: true });
-const canvas2d = document.getElementById('canvas-2d');
-const ctx2d = canvas2d.getContext('2d', { willReadFrequently: true });
 
 const videoSource = document.getElementById('video-source');
 const videoControls = document.getElementById('video-controls');
@@ -32,7 +30,7 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// --- WebGL Shader Setup ---
+// --- 100% GPU WebGL Shader Setup (No 2D Canvas CPU bottleneck!) ---
 const vsSource = `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
@@ -46,20 +44,18 @@ const fsSource = `
     uniform sampler2D u_image;
     uniform vec2 u_texSize;
 
-    // Tones
+    // Core Controls
     uniform float u_exposure, u_contrast, u_highlights, u_shadows, u_whites, u_blacks;
     uniform float u_temp, u_tint, u_vibrance, u_saturation;
-    uniform vec4 u_curves; // High, Light, Dark, Shadow
+    uniform vec4 u_curves; 
 
-    // HSL Colors
+    // HSL & Grading
     uniform vec3 u_hslRed, u_hslOrg, u_hslYel, u_hslGrn, u_hslAqu, u_hslBlu, u_hslPur, u_hslMag;
     uniform vec3 u_pointCol, u_pointShift; 
-
-    // Grading
     uniform vec3 u_gradShad, u_gradMid, u_gradHigh; 
 
     // Effects
-    uniform float u_vignette, u_grain, u_time, u_sharpen, u_clarity;
+    uniform float u_vignette, u_grain, u_time, u_sharpen, u_clarity, u_blur, u_dehaze;
 
     vec3 rgb2hsl(vec3 c) {
         float cMin = min(min(c.r, c.g), c.b); float cMax = max(max(c.r, c.g), c.b);
@@ -101,10 +97,35 @@ const fsSource = `
     }
 
     void main() {
-        vec4 color = texture2D(u_image, v_texCoord);
-        vec3 rgb = color.rgb;
+        vec4 baseColor = texture2D(u_image, v_texCoord);
+        
+        // 1. Hardware Skin Blur (Direct GPU calculation, totally transparent-safe)
+        if (u_blur > 0.0) {
+            vec2 off = (u_blur * 1.5) / u_texSize;
+            baseColor += texture2D(u_image, v_texCoord + vec2(off.x, 0.0));
+            baseColor += texture2D(u_image, v_texCoord - vec2(off.x, 0.0));
+            baseColor += texture2D(u_image, v_texCoord + vec2(0.0, off.y));
+            baseColor += texture2D(u_image, v_texCoord - vec2(0.0, off.y));
+            baseColor += texture2D(u_image, v_texCoord + vec2(off.x, off.y));
+            baseColor += texture2D(u_image, v_texCoord - vec2(off.x, off.y));
+            baseColor += texture2D(u_image, v_texCoord + vec2(-off.x, off.y));
+            baseColor += texture2D(u_image, v_texCoord - vec2(-off.x, off.y));
+            baseColor /= 9.0;
+        }
+        
+        vec3 rgb = baseColor.rgb;
 
-        // Apply Sharpen & Clarity
+        // 2. Hardware Dehaze
+        if (u_dehaze != 0.0) {
+            float dAmt = u_dehaze / 100.0;
+            float darkFactor = 1.0 - ((rgb.r + rgb.g + rgb.b) / 3.0);
+            rgb.r -= dAmt * 0.15 * darkFactor;
+            rgb.g -= dAmt * 0.20 * darkFactor;
+            rgb.b -= dAmt * 0.30 * darkFactor;
+            rgb = clamp(rgb, 0.0, 1.0);
+        }
+
+        // 3. Sharpen & Clarity
         if (u_sharpen > 0.0 || u_clarity != 0.0) {
             float amt = (u_sharpen / 200.0) + (u_clarity / 300.0);
             vec2 dx = vec2(1.0 / u_texSize.x, 0.0); vec2 dy = vec2(0.0, 1.0 / u_texSize.y);
@@ -113,10 +134,12 @@ const fsSource = `
             rgb = rgb * (1.0 + amt*4.0) - (c1 + c2 + c3 + c4) * amt;
         }
 
+        // 4. Basic Light & Temp
         rgb *= (1.0 + (u_exposure / 100.0));
         rgb.r += u_temp * 0.003; rgb.b -= u_temp * 0.003; rgb.g += u_tint * 0.003;
         rgb = clamp(rgb, 0.0, 1.0);
 
+        // 5. HSL Tuning
         vec3 hsl = rgb2hsl(rgb);
         float h = hsl.x;
         vec3 hMod = vec3(0.0);
@@ -142,13 +165,13 @@ const fsSource = `
             rgb = hsl2rgb(hsl);
         }
 
-        // Color Grading
+        // 6. Color Grading
         float lum = dot(rgb, vec3(0.299, 0.587, 0.114));
         if (u_gradShad.y > 0.0 && lum < 0.5) rgb += applyGrading(u_gradShad.x, u_gradShad.y, (0.5 - lum) / 0.5);
         if (u_gradMid.y > 0.0) rgb += applyGrading(u_gradMid.x, u_gradMid.y, 1.0 - (abs(lum - 0.5) / 0.5));
         if (u_gradHigh.y > 0.0 && lum >= 0.5) rgb += applyGrading(u_gradHigh.x, u_gradHigh.y, (lum - 0.5) / 0.5);
 
-        // Curves & Basic Tones
+        // 7. Curves & Advanced Light
         float cLum = lum;
         if (lum > 0.75) cLum += (u_curves.x / 255.0) * ((lum - 0.75) / 0.25);
         else if (lum > 0.5) cLum += (u_curves.y / 255.0) * ((lum - 0.5) / 0.25);
@@ -162,7 +185,7 @@ const fsSource = `
         
         rgb += (u_whites / 255.0); rgb -= (u_blacks / 255.0);
 
-        // Saturation & Vibrance
+        // 8. Saturation & Vibrance
         float maxC = max(max(rgb.r, rgb.g), rgb.b); float minC = min(min(rgb.r, rgb.g), rgb.b);
         float satMod = (u_saturation / 100.0) + ((u_vibrance / 100.0) * (1.0 - (maxC - minC)));
         rgb = mix(vec3(lum), rgb, 1.0 + satMod);
@@ -170,17 +193,15 @@ const fsSource = `
         float cFactor = (u_contrast + 100.0) / 100.0;
         rgb = (rgb - 0.5) * cFactor + 0.5;
 
-        // Vignette
+        // 9. Vignette & Grain
         if (u_vignette != 0.0) {
             float dist = distance(v_texCoord, vec2(0.5, 0.5));
             float vig = 1.0 + (u_vignette / 100.0) * pow(dist * 1.414, 2.0);
             rgb *= clamp(vig, 0.0, 2.0);
         }
-
-        // Grain
         if (u_grain > 0.0) rgb += (rand(v_texCoord + u_time) - 0.5) * (u_grain / 100.0);
 
-        gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
+        gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), baseColor.a);
     }
 `;
 
@@ -290,43 +311,15 @@ numInputs.forEach(numInp => {
     });
 });
 
-// --- GPU Rendering Engine (WITH FIXED BASE OPACITY) ---
+// --- Blazing Fast Direct GPU Transfer ---
 function drawGPUFrame(sourceElement, width, height) {
     if (!sourceElement) return;
-
-    // Fast Pre-processing via 2D Canvas 
-    canvas2d.width = width; canvas2d.height = height;
-    
-    // 1. Draw the base image fully opaque first
-    ctx2d.globalAlpha = 1.0;
-    ctx2d.filter = 'none';
-    ctx2d.drawImage(sourceElement, 0, 0, width, height);
-    
-    // 2. Draw the blur overlay
-    if (settings.blur > 0 || settings.noiseRed > 0) {
-        let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
-        ctx2d.filter = `blur(${bRad}px)`;
-        ctx2d.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
-        ctx2d.drawImage(sourceElement, 0, 0, width, height);
-    }
-    
-    // Reset canvas context
-    ctx2d.filter = 'none'; 
-    ctx2d.globalAlpha = 1.0;
-    
-    // Draw Dehaze overlay map before GPU
-    if (settings.dehaze > 0) {
-        ctx2d.globalCompositeOperation = 'overlay';
-        ctx2d.fillStyle = `rgba(0,0,0,${settings.dehaze / 200})`;
-        ctx2d.fillRect(0,0,width,height);
-        ctx2d.globalCompositeOperation = 'source-over';
-    }
 
     glCanvas.width = width; glCanvas.height = height;
     gl.viewport(0, 0, width, height);
 
     gl.bindTexture(gl.TEXTURE_2D, glTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas2d);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceElement);
 
     // Push Uniforms
     gl.uniform2f(getLoc("u_texSize"), width, height);
@@ -344,6 +337,11 @@ function drawGPUFrame(sourceElement, width, height) {
     gl.uniform1f(getLoc("u_grain"), settings.grain);
     gl.uniform1f(getLoc("u_sharpen"), settings.sharpen);
     gl.uniform1f(getLoc("u_clarity"), settings.clarity);
+    
+    // Pass Blur & Dehaze Directly to GPU
+    let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
+    gl.uniform1f(getLoc("u_blur"), settings.blur > 0 ? bRad * (settings.blur / 250) : (settings.noiseRed > 0 ? bRad : 0.0));
+    gl.uniform1f(getLoc("u_dehaze"), settings.dehaze);
     gl.uniform1f(getLoc("u_time"), Math.random());
     
     gl.uniform4f(getLoc("u_curves"), settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
@@ -372,7 +370,7 @@ function loadFile(file) {
     
     isVideo = file.type.startsWith('video/');
     const url = URL.createObjectURL(file);
-    const MAX_PREVIEW_SIZE = isVideo ? 600 : 800; // Optimal rendering bound
+    const MAX_PREVIEW_SIZE = isVideo ? 600 : 800;
     
     glCanvas.style.display = 'block';
     document.getElementById('status').style.display = 'none';
@@ -391,7 +389,7 @@ function loadFile(file) {
             const scale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(videoSource.videoWidth, videoSource.videoHeight));
             previewWidth = Math.floor(videoSource.videoWidth * scale);
             previewHeight = Math.floor(videoSource.videoHeight * scale);
-            videoSource.currentTime = 0.05; // Force trigger draw frame
+            videoSource.currentTime = 0.05; 
         };
 
         videoSource.onseeked = () => requestAnimationFrame(renderCurrent);
@@ -456,7 +454,7 @@ vidSeek.oninput = (e) => {
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('file-upload').addEventListener('change', (e) => loadFile(e.target.files[0]));
 
-// --- Video & Photo Downloader (High Quality Export Engine) ---
+// --- Robust Video & Photo Downloader ---
 async function exportCurrentFile() {
     if (!originalImage && !isVideo) return;
     const btn = document.getElementById(isBatchMode ? 'batch-download-btn' : 'download-btn');
@@ -464,7 +462,6 @@ async function exportCurrentFile() {
     btn.textContent = '⏳';
 
     if (!isVideo) {
-        // High Res Photo Export (Max Quality 1.0)
         const width = originalImage.naturalWidth, height = originalImage.naturalHeight;
         drawGPUFrame(originalImage, width, height);
         
@@ -473,86 +470,79 @@ async function exportCurrentFile() {
         a.href = glCanvas.toDataURL('image/jpeg', 1.0);
         a.click();
         
-        // Restore Preview Resolution
         drawGPUFrame(originalImage, previewWidth, previewHeight);
         btn.textContent = originalText;
     } else {
-        // Full Real-time Video Mux & Recording
-        videoSource.pause();
-        videoSource.currentTime = 0;
-        await new Promise(r => { videoSource.onseeked = r; });
-
-        // Allow up to 1080p export for High Quality clarity
-        const scale = Math.min(1, 1920 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
-        const eWidth = Math.floor(videoSource.videoWidth * scale);
-        const eHeight = Math.floor(videoSource.videoHeight * scale);
-
-        drawGPUFrame(videoSource, eWidth, eHeight);
-
-        // Capture at stable 30fps
-        const stream = glCanvas.captureStream(30);
-        
-        // Mux original Audio back into the recording
         try {
-            const audioStream = videoSource.captureStream ? videoSource.captureStream() : videoSource.mozCaptureStream ? videoSource.mozCaptureStream() : null;
-            if (audioStream && audioStream.getAudioTracks().length > 0) {
-                stream.addTrack(audioStream.getAudioTracks()[0]);
-            }
-        } catch(e) { console.log('Audio capture unsupported on this browser', e); }
+            videoSource.pause();
+            videoSource.currentTime = 0;
+            videoSource.loop = false; 
+            await new Promise(r => { videoSource.onseeked = r; });
 
-        recordedChunks = [];
-        
-        // Setup High Bitrate (10 Mbps) & proper codec extension fallback to prevent corruption
-        let options = { videoBitsPerSecond: 10000000 }; 
-        let ext = 'webm';
-        
-        if (MediaRecorder.isTypeSupported('video/mp4')) {
-            options.mimeType = 'video/mp4';
-            ext = 'mp4';
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-            options.mimeType = 'video/webm;codecs=vp9';
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
-            options.mimeType = 'video/webm;codecs=vp8';
-        }
+            // Maximize Quality & Frame
+            const scale = Math.min(1, 1920 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
+            const eWidth = Math.floor(videoSource.videoWidth * scale);
+            const eHeight = Math.floor(videoSource.videoHeight * scale);
 
-        mediaRecorder = new MediaRecorder(stream, options);
-
-        mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) recordedChunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `video_grade_${Date.now()}.${ext}`;
-            a.click();
-            btn.textContent = originalText;
-            drawGPUFrame(videoSource, previewWidth, previewHeight); // Restore sizing
-        };
-
-        mediaRecorder.start();
-        videoSource.play();
-
-        // requestVideoFrameCallback perfectly syncs drawing to prevent choppiness
-        function recordRenderLoop() {
-            if (videoSource.ended || videoSource.paused) {
-                if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-                return;
-            }
             drawGPUFrame(videoSource, eWidth, eHeight);
+
+            // 30fps lock
+            const stream = glCanvas.captureStream(30);
             
-            if ('requestVideoFrameCallback' in videoSource) {
-                videoSource.requestVideoFrameCallback(recordRenderLoop);
+            // Audio muxing restoration
+            try {
+                const audioStream = videoSource.captureStream ? videoSource.captureStream() : videoSource.mozCaptureStream ? videoSource.mozCaptureStream() : null;
+                if (audioStream && audioStream.getAudioTracks().length > 0) {
+                    stream.addTrack(audioStream.getAudioTracks()[0]);
+                }
+            } catch(e) { console.log('Audio capture unsupported'); }
+
+            recordedChunks = [];
+            
+            // Fixes file corruption & maximizes bitrate to 10Mbps
+            let options = { videoBitsPerSecond: 10000000 }; 
+            let ext = 'mp4';
+            
+            if (MediaRecorder.isTypeSupported('video/mp4')) {
+                options.mimeType = 'video/mp4';
+            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+                options.mimeType = 'video/webm;codecs=vp9'; ext = 'webm';
+            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+                options.mimeType = 'video/webm;codecs=vp8'; ext = 'webm';
             } else {
+                options.mimeType = 'video/webm'; ext = 'webm';
+            }
+
+            mediaRecorder = new MediaRecorder(stream, options);
+            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `video_grade_${Date.now()}.${ext}`;
+                a.click();
+                btn.textContent = originalText;
+                drawGPUFrame(videoSource, previewWidth, previewHeight); 
+            };
+
+            mediaRecorder.start(250); // Push data chunks reliably
+            videoSource.play();
+
+            function recordRenderLoop() {
+                // Safety net: check if video naturally ended or is explicitly finished
+                if (videoSource.ended || videoSource.currentTime >= videoSource.duration - 0.05) {
+                    if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+                    return;
+                }
+                
+                drawGPUFrame(videoSource, eWidth, eHeight);
                 requestAnimationFrame(recordRenderLoop);
             }
-        }
-        
-        if ('requestVideoFrameCallback' in videoSource) {
-            videoSource.requestVideoFrameCallback(recordRenderLoop);
-        } else {
             requestAnimationFrame(recordRenderLoop);
+        } catch (err) {
+            alert("Export failed: Please try again. " + err.message);
+            btn.textContent = originalText;
         }
     }
 }
@@ -616,14 +606,22 @@ pickerBtn.addEventListener('click', () => {
     pickerTarget.style.display = isPicking ? "block" : "none";
 });
 
+// Use a temporary 1x1 canvas purely for extracting the exact color under the mouse without slow glReadPixels
+const pickCanvas = document.createElement('canvas'); 
+pickCanvas.width = 1; pickCanvas.height = 1;
+const pickCtx = pickCanvas.getContext('2d', { willReadFrequently: true });
+
 glCanvas.addEventListener('click', (e) => {
     if(!isPicking) return;
     const rect = glCanvas.getBoundingClientRect();
     
-    const x = (e.clientX - rect.left) * (canvas2d.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas2d.height / rect.height);
-    
-    const pixel = ctx2d.getImageData(x, y, 1, 1).data;
+    // Draw exactly the clicked pixel to a tiny canvas
+    pickCtx.drawImage(isVideo ? videoSource : originalImage, 
+        (e.clientX - rect.left) * ((isVideo ? videoSource.videoWidth : originalImage.naturalWidth) / rect.width), 
+        (e.clientY - rect.top) * ((isVideo ? videoSource.videoHeight : originalImage.naturalHeight) / rect.height), 
+        1, 1, 0, 0, 1, 1);
+        
+    const pixel = pickCtx.getImageData(0, 0, 1, 1).data;
     const maxC = Math.max(pixel[0], pixel[1], pixel[2]) / 255;
     const minC = Math.min(pixel[0], pixel[1], pixel[2]) / 255;
     const d = maxC - minC;
