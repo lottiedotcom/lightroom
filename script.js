@@ -30,12 +30,15 @@ let settings = {
     texture: 0, clarity: 0, dehaze: 0, blur: 0, vignette: 0, sharpen: 0, noiseRed: 0, grain: 0
 };
 
-// --- 100% GPU WebGL Shader Setup (No 2D Canvas CPU bottleneck!) ---
+// --- WebGL Shader Engine (Full GPU Color Pipeline) ---
 const vsSource = `
     attribute vec2 a_position;
     attribute vec2 a_texCoord;
     varying vec2 v_texCoord;
-    void main() { gl_Position = vec4(a_position, 0.0, 1.0); v_texCoord = a_texCoord; }
+    void main() { 
+        gl_Position = vec4(a_position, 0.0, 1.0); 
+        v_texCoord = a_texCoord; 
+    }
 `;
 
 const fsSource = `
@@ -44,64 +47,58 @@ const fsSource = `
     uniform sampler2D u_image;
     uniform vec2 u_texSize;
 
-    // Core Controls
+    // Light & Tone Controls
     uniform float u_exposure, u_contrast, u_highlights, u_shadows, u_whites, u_blacks;
     uniform float u_temp, u_tint, u_vibrance, u_saturation;
-    uniform vec4 u_curves; 
+    uniform vec4 u_curves; // High, Light, Dark, Shadow
 
-    // HSL & Grading
+    // 8-Channel HSL & Point Color
     uniform vec3 u_hslRed, u_hslOrg, u_hslYel, u_hslGrn, u_hslAqu, u_hslBlu, u_hslPur, u_hslMag;
     uniform vec3 u_pointCol, u_pointShift; 
+
+    // Color Grading
     uniform vec3 u_gradShad, u_gradMid, u_gradHigh; 
 
-    // Effects
-    uniform float u_vignette, u_grain, u_time, u_sharpen, u_clarity, u_blur, u_dehaze;
+    // Presence & Effects
+    uniform float u_vignette, u_grain, u_time, u_sharpen, u_clarity, u_texture, u_blur, u_dehaze;
 
-    vec3 rgb2hsl(vec3 c) {
-        float cMin = min(min(c.r, c.g), c.b); float cMax = max(max(c.r, c.g), c.b);
-        float l = (cMax + cMin) / 2.0; float s = 0.0; float h = 0.0;
-        if (cMax != cMin) {
-            float d = cMax - cMin;
-            s = l > 0.5 ? d / (2.0 - cMax - cMin) : d / (cMax + cMin);
-            if (cMax == c.r) { h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0); }
-            else if (cMax == c.g) { h = (c.b - c.r) / d + 2.0; }
-            else { h = (c.r - c.g) / d + 4.0; }
-            h /= 6.0;
-        }
-        return vec3(h * 360.0, s, l);
-    }
-
+    // Branchless, High-Precision HSL to RGB
     vec3 hsl2rgb(vec3 c) {
-        float h = c.x / 360.0; float s = c.y; float l = c.z;
-        if (s == 0.0) return vec3(l);
-        float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
-        float p = 2.0 * l - q;
-        vec3 rgb = vec3(h + 1.0/3.0, h, h - 1.0/3.0);
-        for(int i=0; i<3; i++) {
-            if(rgb[i] < 0.0) rgb[i] += 1.0;
-            if(rgb[i] > 1.0) rgb[i] -= 1.0;
-            if(rgb[i] < 1.0/6.0) rgb[i] = p + (q - p) * 6.0 * rgb[i];
-            else if(rgb[i] < 0.5) rgb[i] = q;
-            else if(rgb[i] < 2.0/3.0) rgb[i] = p + (q - p) * (2.0/3.0 - rgb[i]) * 6.0;
-            else rgb[i] = p;
-        }
-        return rgb;
+        vec3 rgb = clamp(abs(mod(c.x / 60.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+        return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
     }
 
-    float rand(vec2 co) { return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453); }
+    // High-Precision RGB to HSL
+    vec3 rgb2hsl(vec3 c) {
+        float maxC = max(max(c.r, c.g), c.b);
+        float minC = min(min(c.r, c.g), c.b);
+        float d = maxC - minC;
+        float l = (maxC + minC) * 0.5;
+        if (d == 0.0) return vec3(0.0, 0.0, l);
+        float s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC);
+        float h = 0.0;
+        if (maxC == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+        else if (maxC == c.g) h = (c.b - c.r) / d + 2.0;
+        else h = (c.r - c.g) / d + 4.0;
+        return vec3(h * 60.0, s, l);
+    }
+
+    float rand(vec2 co) { 
+        return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453); 
+    }
 
     vec3 applyGrading(float h, float s, float w) {
-        if(s == 0.0) return vec3(0.0);
-        vec3 c = hsl2rgb(vec3(h, s/100.0, 0.5));
+        if (s <= 0.0) return vec3(0.0);
+        vec3 c = hsl2rgb(vec3(h, s / 100.0, 0.5));
         return (c - 0.5) * w;
     }
 
     void main() {
         vec4 baseColor = texture2D(u_image, v_texCoord);
-        
-        // 1. Hardware Skin Blur (Direct GPU calculation, totally transparent-safe)
+
+        // 1. Skin Blur
         if (u_blur > 0.0) {
-            vec2 off = (u_blur * 1.5) / u_texSize;
+            vec2 off = (u_blur * 2.0) / u_texSize;
             baseColor += texture2D(u_image, v_texCoord + vec2(off.x, 0.0));
             baseColor += texture2D(u_image, v_texCoord - vec2(off.x, 0.0));
             baseColor += texture2D(u_image, v_texCoord + vec2(0.0, off.y));
@@ -112,10 +109,10 @@ const fsSource = `
             baseColor += texture2D(u_image, v_texCoord - vec2(-off.x, off.y));
             baseColor /= 9.0;
         }
-        
+
         vec3 rgb = baseColor.rgb;
 
-        // 2. Hardware Dehaze
+        // 2. Dehaze
         if (u_dehaze != 0.0) {
             float dAmt = u_dehaze / 100.0;
             float darkFactor = 1.0 - ((rgb.r + rgb.g + rgb.b) / 3.0);
@@ -125,21 +122,27 @@ const fsSource = `
             rgb = clamp(rgb, 0.0, 1.0);
         }
 
-        // 3. Sharpen & Clarity
-        if (u_sharpen > 0.0 || u_clarity != 0.0) {
-            float amt = (u_sharpen / 200.0) + (u_clarity / 300.0);
-            vec2 dx = vec2(1.0 / u_texSize.x, 0.0); vec2 dy = vec2(0.0, 1.0 / u_texSize.y);
-            vec3 c1 = texture2D(u_image, v_texCoord - dx).rgb; vec3 c2 = texture2D(u_image, v_texCoord + dx).rgb;
-            vec3 c3 = texture2D(u_image, v_texCoord - dy).rgb; vec3 c4 = texture2D(u_image, v_texCoord + dy).rgb;
-            rgb = rgb * (1.0 + amt*4.0) - (c1 + c2 + c3 + c4) * amt;
+        // 3. Sharpen, Texture & Clarity
+        float effectiveSharpen = u_sharpen + (u_clarity * 0.6) + (u_texture * 0.4);
+        if (effectiveSharpen > 0.0) {
+            float amt = effectiveSharpen / 200.0;
+            vec2 dx = vec2(1.0 / u_texSize.x, 0.0);
+            vec2 dy = vec2(0.0, 1.0 / u_texSize.y);
+            vec3 c1 = texture2D(u_image, v_texCoord - dx).rgb;
+            vec3 c2 = texture2D(u_image, v_texCoord + dx).rgb;
+            vec3 c3 = texture2D(u_image, v_texCoord - dy).rgb;
+            vec3 c4 = texture2D(u_image, v_texCoord + dy).rgb;
+            rgb = rgb * (1.0 + amt * 4.0) - (c1 + c2 + c3 + c4) * amt;
         }
 
-        // 4. Basic Light & Temp
+        // 4. Exposure & White Balance
         rgb *= (1.0 + (u_exposure / 100.0));
-        rgb.r += u_temp * 0.003; rgb.b -= u_temp * 0.003; rgb.g += u_tint * 0.003;
+        rgb.r += u_temp * 0.0035;
+        rgb.b -= u_temp * 0.0035;
+        rgb.g += u_tint * 0.0035;
         rgb = clamp(rgb, 0.0, 1.0);
 
-        // 5. HSL Tuning
+        // 5. 8-Channel HSL & Selective Color
         vec3 hsl = rgb2hsl(rgb);
         float h = hsl.x;
         vec3 hMod = vec3(0.0);
@@ -153,9 +156,12 @@ const fsSource = `
         else if (h > 260.0 && h <= 290.0) hMod = u_hslPur;
         else if (h > 290.0 && h <= 345.0) hMod = u_hslMag;
 
+        // Point Color Eyedropper Shift
         if (u_pointCol.x >= 0.0) {
             float hDiff = min(abs(h - u_pointCol.x), 360.0 - abs(h - u_pointCol.x));
-            if (hDiff < 30.0) hMod += u_pointShift * (1.0 - (hDiff / 30.0));
+            if (hDiff < 35.0) {
+                hMod += u_pointShift * (1.0 - (hDiff / 35.0));
+            }
         }
 
         if (hMod.x != 0.0 || hMod.y != 0.0 || hMod.z != 0.0) {
@@ -165,41 +171,50 @@ const fsSource = `
             rgb = hsl2rgb(hsl);
         }
 
-        // 6. Color Grading
+        // 6. Color Grading Wheels
         float lum = dot(rgb, vec3(0.299, 0.587, 0.114));
         if (u_gradShad.y > 0.0 && lum < 0.5) rgb += applyGrading(u_gradShad.x, u_gradShad.y, (0.5 - lum) / 0.5);
         if (u_gradMid.y > 0.0) rgb += applyGrading(u_gradMid.x, u_gradMid.y, 1.0 - (abs(lum - 0.5) / 0.5));
         if (u_gradHigh.y > 0.0 && lum >= 0.5) rgb += applyGrading(u_gradHigh.x, u_gradHigh.y, (lum - 0.5) / 0.5);
 
-        // 7. Curves & Advanced Light
+        // 7. Parametric Tone Curves
         float cLum = lum;
-        if (lum > 0.75) cLum += (u_curves.x / 255.0) * ((lum - 0.75) / 0.25);
-        else if (lum > 0.5) cLum += (u_curves.y / 255.0) * ((lum - 0.5) / 0.25);
-        else if (lum > 0.25) cLum += (u_curves.z / 255.0) * ((0.5 - lum) / 0.25);
-        else cLum += (u_curves.w / 255.0) * ((0.25 - lum) / 0.25);
-        rgb *= (lum <= 0.0) ? 0.0 : (cLum / lum);
+        if (lum > 0.75) cLum += (u_curves.x / 100.0) * ((lum - 0.75) / 0.25);
+        else if (lum > 0.5) cLum += (u_curves.y / 100.0) * ((lum - 0.5) / 0.25);
+        else if (lum > 0.25) cLum += (u_curves.z / 100.0) * ((0.5 - lum) / 0.25);
+        else cLum += (u_curves.w / 100.0) * ((0.25 - lum) / 0.25);
         
-        lum = dot(rgb, vec3(0.299, 0.587, 0.114));
-        if (lum > 0.5) rgb += (u_highlights / 255.0) * ((lum - 0.5) / 0.5);
-        else rgb += (u_shadows / 255.0) * ((0.5 - lum) / 0.5);
-        
-        rgb += (u_whites / 255.0); rgb -= (u_blacks / 255.0);
+        rgb *= (lum <= 0.001) ? 0.0 : (clamp(cLum, 0.0, 1.0) / lum);
 
-        // 8. Saturation & Vibrance
-        float maxC = max(max(rgb.r, rgb.g), rgb.b); float minC = min(min(rgb.r, rgb.g), rgb.b);
+        // 8. Basic Tones & Clipping
+        lum = dot(rgb, vec3(0.299, 0.587, 0.114));
+        if (lum > 0.5) rgb += (u_highlights / 100.0) * ((lum - 0.5) / 0.5);
+        else rgb += (u_shadows / 100.0) * ((0.5 - lum) / 0.5);
+
+        rgb += (u_whites / 100.0);
+        rgb -= (u_blacks / 100.0);
+
+        // 9. Saturation & Vibrance
+        float maxC = max(max(rgb.r, rgb.g), rgb.b);
+        float minC = min(min(rgb.r, rgb.g), rgb.b);
         float satMod = (u_saturation / 100.0) + ((u_vibrance / 100.0) * (1.0 - (maxC - minC)));
         rgb = mix(vec3(lum), rgb, 1.0 + satMod);
 
-        float cFactor = (u_contrast + 100.0) / 100.0;
+        // 10. Contrast (Full Dynamic Range)
+        float cFactor = (259.0 * (u_contrast + 255.0)) / (255.0 * (259.0 - u_contrast));
         rgb = (rgb - 0.5) * cFactor + 0.5;
 
-        // 9. Vignette & Grain
+        // 11. Vignette
         if (u_vignette != 0.0) {
             float dist = distance(v_texCoord, vec2(0.5, 0.5));
             float vig = 1.0 + (u_vignette / 100.0) * pow(dist * 1.414, 2.0);
             rgb *= clamp(vig, 0.0, 2.0);
         }
-        if (u_grain > 0.0) rgb += (rand(v_texCoord + u_time) - 0.5) * (u_grain / 100.0);
+
+        // 12. Grain
+        if (u_grain > 0.0) {
+            rgb += (rand(v_texCoord + u_time) - 0.5) * (u_grain / 100.0);
+        }
 
         gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), baseColor.a);
     }
@@ -221,15 +236,18 @@ gl.useProgram(program);
 const positionBuffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+
 const texCoordBuffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,1, 1,1, 0,0, 0,0, 1,1, 1,0]), gl.STATIC_DRAW);
 
 const posLocation = gl.getAttribLocation(program, "a_position");
 const texLocation = gl.getAttribLocation(program, "a_texCoord");
+
 gl.enableVertexAttribArray(posLocation);
 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
 gl.vertexAttribPointer(posLocation, 2, gl.FLOAT, false, 0, 0);
+
 gl.enableVertexAttribArray(texLocation);
 gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 gl.vertexAttribPointer(texLocation, 2, gl.FLOAT, false, 0, 0);
@@ -241,7 +259,9 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-function getLoc(name) { return gl.getUniformLocation(program, name); }
+function getLoc(name) { 
+    return gl.getUniformLocation(program, name); 
+}
 
 // --- UI Navigation ---
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -284,8 +304,11 @@ function updateUI() {
 }
 
 function renderCurrent() {
-    if (isVideo && videoSource.readyState >= 2) drawGPUFrame(videoSource, previewWidth, previewHeight);
-    else if (originalImage) drawGPUFrame(originalImage, previewWidth, previewHeight);
+    if (isVideo && videoSource.readyState >= 2) {
+        drawGPUFrame(videoSource, previewWidth, previewHeight);
+    } else if (originalImage) {
+        drawGPUFrame(originalImage, previewWidth, previewHeight);
+    }
 }
 
 sliders.forEach(slider => {
@@ -311,17 +334,18 @@ numInputs.forEach(numInp => {
     });
 });
 
-// --- Blazing Fast Direct GPU Transfer ---
+// --- Direct GPU Frame Transfer ---
 function drawGPUFrame(sourceElement, width, height) {
     if (!sourceElement) return;
 
-    glCanvas.width = width; glCanvas.height = height;
+    glCanvas.width = width; 
+    glCanvas.height = height;
     gl.viewport(0, 0, width, height);
 
     gl.bindTexture(gl.TEXTURE_2D, glTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceElement);
 
-    // Push Uniforms
+    // Uniform Bindings
     gl.uniform2f(getLoc("u_texSize"), width, height);
     gl.uniform1f(getLoc("u_exposure"), settings.exposure);
     gl.uniform1f(getLoc("u_contrast"), settings.contrast);
@@ -337,14 +361,17 @@ function drawGPUFrame(sourceElement, width, height) {
     gl.uniform1f(getLoc("u_grain"), settings.grain);
     gl.uniform1f(getLoc("u_sharpen"), settings.sharpen);
     gl.uniform1f(getLoc("u_clarity"), settings.clarity);
+    gl.uniform1f(getLoc("u_texture"), settings.texture);
     
-    // Pass Blur & Dehaze Directly to GPU
-    let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
-    gl.uniform1f(getLoc("u_blur"), settings.blur > 0 ? bRad * (settings.blur / 250) : (settings.noiseRed > 0 ? bRad : 0.0));
+    // Skin Blur & Dehaze
+    let bRad = settings.blur > 0 ? 3.0 : (settings.noiseRed / 25.0);
+    gl.uniform1f(getLoc("u_blur"), settings.blur > 0 ? bRad * (settings.blur / 100.0) : (settings.noiseRed > 0 ? bRad : 0.0));
     gl.uniform1f(getLoc("u_dehaze"), settings.dehaze);
     gl.uniform1f(getLoc("u_time"), Math.random());
     
     gl.uniform4f(getLoc("u_curves"), settings.curveHigh, settings.curveLight, settings.curveDark, settings.curveShadow);
+    
+    // 8 Channels
     gl.uniform3f(getLoc("u_hslRed"), settings.redH, settings.redS, settings.redL);
     gl.uniform3f(getLoc("u_hslOrg"), settings.orgH, settings.orgS, settings.orgL);
     gl.uniform3f(getLoc("u_hslYel"), settings.yelH, settings.yelS, settings.yelL);
@@ -364,7 +391,7 @@ function drawGPUFrame(sourceElement, width, height) {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 }
 
-// --- File Handling (Video / Image Setup) ---
+// --- File Handling ---
 function loadFile(file) {
     if (!file) return;
     
@@ -407,7 +434,7 @@ function loadFile(file) {
     }
 }
 
-// Video Scrubber & Auto-Play
+// Video Scrubber & Playback
 function videoPlaybackLoop() {
     if (!isPlayingVideo) return;
     drawGPUFrame(videoSource, previewWidth, previewHeight);
@@ -454,7 +481,7 @@ vidSeek.oninput = (e) => {
 document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
 document.getElementById('file-upload').addEventListener('change', (e) => loadFile(e.target.files[0]));
 
-// --- Robust Video & Photo Downloader ---
+// --- Complete Full Video Downloader ---
 async function exportCurrentFile() {
     if (!originalImage && !isVideo) return;
     const btn = document.getElementById(isBatchMode ? 'batch-download-btn' : 'download-btn');
@@ -475,46 +502,60 @@ async function exportCurrentFile() {
     } else {
         try {
             videoSource.pause();
-            videoSource.currentTime = 0;
-            videoSource.loop = false; 
-            await new Promise(r => { videoSource.onseeked = r; });
+            
+            // Reliable Rewind Promise with Timeout Fallback
+            await new Promise(resolve => {
+                let resolved = false;
+                const done = () => {
+                    if (!resolved) {
+                        resolved = true;
+                        videoSource.onseeked = null;
+                        resolve();
+                    }
+                };
+                videoSource.onseeked = done;
+                videoSource.currentTime = 0;
+                setTimeout(done, 350);
+            });
 
-            // Maximize Quality & Frame
+            // Target Full Native Resolution
             const scale = Math.min(1, 1920 / Math.max(videoSource.videoWidth, videoSource.videoHeight));
             const eWidth = Math.floor(videoSource.videoWidth * scale);
             const eHeight = Math.floor(videoSource.videoHeight * scale);
 
             drawGPUFrame(videoSource, eWidth, eHeight);
 
-            // 30fps lock
             const stream = glCanvas.captureStream(30);
             
-            // Audio muxing restoration
+            // Audio Stream
             try {
-                const audioStream = videoSource.captureStream ? videoSource.captureStream() : videoSource.mozCaptureStream ? videoSource.mozCaptureStream() : null;
+                const audioStream = videoSource.captureStream ? videoSource.captureStream() : (videoSource.mozCaptureStream ? videoSource.mozCaptureStream() : null);
                 if (audioStream && audioStream.getAudioTracks().length > 0) {
                     stream.addTrack(audioStream.getAudioTracks()[0]);
                 }
-            } catch(e) { console.log('Audio capture unsupported'); }
+            } catch (e) {
+                console.log('Audio track skipped:', e);
+            }
 
             recordedChunks = [];
             
-            // Fixes file corruption & maximizes bitrate to 10Mbps
-            let options = { videoBitsPerSecond: 10000000 }; 
+            let options = { videoBitsPerSecond: 12000000 };
             let ext = 'mp4';
             
             if (MediaRecorder.isTypeSupported('video/mp4')) {
                 options.mimeType = 'video/mp4';
             } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-                options.mimeType = 'video/webm;codecs=vp9'; ext = 'webm';
-            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
-                options.mimeType = 'video/webm;codecs=vp8'; ext = 'webm';
+                options.mimeType = 'video/webm;codecs=vp9'; 
+                ext = 'webm';
             } else {
-                options.mimeType = 'video/webm'; ext = 'webm';
+                options.mimeType = 'video/webm'; 
+                ext = 'webm';
             }
 
             mediaRecorder = new MediaRecorder(stream, options);
-            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+            mediaRecorder.ondataavailable = (e) => { 
+                if (e.data && e.data.size > 0) recordedChunks.push(e.data); 
+            };
 
             mediaRecorder.onstop = () => {
                 const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
@@ -523,25 +564,32 @@ async function exportCurrentFile() {
                 a.download = `video_grade_${Date.now()}.${ext}`;
                 a.click();
                 btn.textContent = originalText;
-                drawGPUFrame(videoSource, previewWidth, previewHeight); 
+                drawGPUFrame(videoSource, previewWidth, previewHeight);
             };
 
-            mediaRecorder.start(250); // Push data chunks reliably
-            videoSource.play();
+            // Hook completion directly to video finish
+            videoSource.onended = () => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+            };
+
+            mediaRecorder.start(250);
+            await videoSource.play();
 
             function recordRenderLoop() {
-                // Safety net: check if video naturally ended or is explicitly finished
-                if (videoSource.ended || videoSource.currentTime >= videoSource.duration - 0.05) {
-                    if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+                if (videoSource.ended || videoSource.paused) {
+                    if (videoSource.ended && mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
                     return;
                 }
-                
                 drawGPUFrame(videoSource, eWidth, eHeight);
                 requestAnimationFrame(recordRenderLoop);
             }
             requestAnimationFrame(recordRenderLoop);
         } catch (err) {
-            alert("Export failed: Please try again. " + err.message);
+            alert("Export error: " + err.message);
             btn.textContent = originalText;
         }
     }
@@ -606,16 +654,15 @@ pickerBtn.addEventListener('click', () => {
     pickerTarget.style.display = isPicking ? "block" : "none";
 });
 
-// Use a temporary 1x1 canvas purely for extracting the exact color under the mouse without slow glReadPixels
 const pickCanvas = document.createElement('canvas'); 
-pickCanvas.width = 1; pickCanvas.height = 1;
+pickCanvas.width = 1; 
+pickCanvas.height = 1;
 const pickCtx = pickCanvas.getContext('2d', { willReadFrequently: true });
 
 glCanvas.addEventListener('click', (e) => {
-    if(!isPicking) return;
+    if (!isPicking) return;
     const rect = glCanvas.getBoundingClientRect();
     
-    // Draw exactly the clicked pixel to a tiny canvas
     pickCtx.drawImage(isVideo ? videoSource : originalImage, 
         (e.clientX - rect.left) * ((isVideo ? videoSource.videoWidth : originalImage.naturalWidth) / rect.width), 
         (e.clientY - rect.top) * ((isVideo ? videoSource.videoHeight : originalImage.naturalHeight) / rect.height), 
@@ -635,7 +682,8 @@ glCanvas.addEventListener('click', (e) => {
     }
     
     settings.pickedH = h * 360; 
-    settings.pickedS = 0; settings.pickedL = 0;
+    settings.pickedS = 0; 
+    settings.pickedL = 0;
     pickedColorDisplay.style.background = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
     
     isPicking = false;
@@ -645,16 +693,49 @@ glCanvas.addEventListener('click', (e) => {
     requestAnimationFrame(renderCurrent);
 });
 
-// History, Save, and Clipboard Setup 
-document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
-document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); } catch (e) { alert('Could not paste preset.'); }};
-document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
+// Presets & History
+document.getElementById('copy-preset').onclick = () => { 
+    navigator.clipboard.writeText(JSON.stringify(settings)); 
+    alert('Preset copied! ✨'); 
+};
+document.getElementById('paste-preset').onclick = async () => { 
+    try { 
+        const text = await navigator.clipboard.readText(); 
+        settings = { ...settings, ...JSON.parse(text) }; 
+        updateUI(); 
+    } catch (e) { 
+        alert('Could not paste preset.'); 
+    }
+};
+document.getElementById('save-preset').onclick = () => { 
+    const a = document.createElement('a'); 
+    a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); 
+    a.download = "preset.json"; 
+    a.click(); 
+};
 document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
-document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); }; reader.readAsText(file); });
-document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); };
+document.getElementById('load-preset').addEventListener('change', (e) => { 
+    const file = e.target.files[0]; 
+    if (!file) return; 
+    const reader = new FileReader(); 
+    reader.onload = (event) => { 
+        settings = { ...settings, ...JSON.parse(event.target.result) }; 
+        updateUI(); 
+    }; 
+    reader.readAsText(file); 
+});
+document.getElementById('reset-btn').onclick = () => { 
+    Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); 
+    updateUI(); 
+};
 
-let history = []; let historyIndex = -1;
-function saveHistory() { history = history.slice(0, historyIndex + 1); history.push(JSON.parse(JSON.stringify(settings))); historyIndex++; }
+let history = []; 
+let historyIndex = -1;
+function saveHistory() { 
+    history = history.slice(0, historyIndex + 1); 
+    history.push(JSON.parse(JSON.stringify(settings))); 
+    historyIndex++; 
+}
 saveHistory();
 
 document.getElementById('panel-presets').classList.add('active');
