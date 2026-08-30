@@ -16,13 +16,15 @@ let settings = {
 };
 
 // --- Render Debouncing for Smoothness ---
-let renderFrameId = null;
+let renderTimeoutId = null;
 function queueRender() {
-    if (renderFrameId) cancelAnimationFrame(renderFrameId);
-    renderFrameId = requestAnimationFrame(() => {
+    if (renderTimeoutId) clearTimeout(renderTimeoutId);
+    // A 30ms timeout gives the browser's UI thread breathing room to visually 
+    // update the slider's physical position first, eliminating the glitchy feeling.
+    renderTimeoutId = setTimeout(() => {
         renderPreview();
-        renderFrameId = null;
-    });
+        renderTimeoutId = null;
+    }, 30);
 }
 
 // --- History System ---
