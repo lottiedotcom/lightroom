@@ -4,6 +4,8 @@ let originalImage = null;
 const MAX_PREVIEW_SIZE = 800; 
 let previewWidth = 0, previewHeight = 0;
 
+let isDragging = false; // Tracks if a slider is actively being moved
+
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
@@ -16,15 +18,13 @@ let settings = {
 };
 
 // --- Render Debouncing for Smoothness ---
-let renderTimeoutId = null;
+let renderFrameId = null;
 function queueRender() {
-    if (renderTimeoutId) clearTimeout(renderTimeoutId);
-    // A 30ms timeout gives the browser's UI thread breathing room to visually 
-    // update the slider's physical position first, eliminating the glitchy feeling.
-    renderTimeoutId = setTimeout(() => {
+    if (renderFrameId) cancelAnimationFrame(renderFrameId);
+    renderFrameId = requestAnimationFrame(() => {
         renderPreview();
-        renderTimeoutId = null;
-    }, 30);
+        renderFrameId = null;
+    });
 }
 
 // --- History System ---
@@ -47,6 +47,7 @@ document.getElementById('undo-btn').addEventListener('click', () => {
     if (historyIndex > 0) {
         historyIndex--;
         settings = JSON.parse(JSON.stringify(history[historyIndex]));
+        isDragging = false;
         updateUI();
         updateHistoryButtons();
     }
@@ -56,6 +57,7 @@ document.getElementById('redo-btn').addEventListener('click', () => {
     if (historyIndex < history.length - 1) {
         historyIndex++;
         settings = JSON.parse(JSON.stringify(history[historyIndex]));
+        isDragging = false;
         updateUI();
         updateHistoryButtons();
     }
@@ -110,9 +112,14 @@ sliders.forEach(slider => {
         settings[e.target.id] = val;
         const numInp = document.getElementById(`num-${e.target.id}`);
         if (numInp) numInp.value = val;
+        isDragging = true; // Drop resolution for speed
         queueRender(); 
     });
-    slider.addEventListener('change', () => { saveHistory(); });
+    slider.addEventListener('change', () => { 
+        isDragging = false; // Restore high quality
+        queueRender();
+        saveHistory(); 
+    });
 });
 
 numInputs.forEach(numInp => {
@@ -127,6 +134,7 @@ numInputs.forEach(numInp => {
         settings[settingKey] = val;
         const slider = document.getElementById(settingKey);
         if (slider) slider.value = val;
+        isDragging = true;
         queueRender();
     });
 
@@ -138,6 +146,7 @@ numInputs.forEach(numInp => {
         if (!isNaN(max) && val > max) val = max;
         numInp.value = val;
         settings[settingKey] = val;
+        isDragging = false;
         updateUI();
         saveHistory();
     });
@@ -164,9 +173,8 @@ document.getElementById('file-upload').addEventListener('change', (e) => {
             document.getElementById('download-btn').disabled = false;
             document.getElementById('auto-btn').disabled = false;
             
-            setTimeout(() => {
-                queueRender();
-            }, 50);
+            isDragging = false;
+            queueRender();
         };
         originalImage.src = event.target.result;
     };
@@ -230,17 +238,18 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     settings.tint = Math.round(Math.max(-25, Math.min(25, -gDiff * 0.5)));
     settings.vibrance = 12;
 
+    isDragging = false;
     updateUI();
     saveHistory();
 });
 
 // --- Presets & Batch Processing ---
 document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
-document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
+document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; isDragging = false; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
 document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
 document.getElementById('load-preset-btn').onclick = () => document.getElementById('load-preset').click();
-document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
-document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
+document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; isDragging = false; updateUI(); saveHistory(); }; reader.readAsText(file); });
+document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); isDragging = false; updateUI(); saveHistory(); };
 
 // --- Batch Process Engine ---
 const batchBtn = document.getElementById('batch-process-btn');
@@ -531,7 +540,6 @@ function processImageCanvas(img, currentSettings) {
     const eCtx = fullCanvas.getContext('2d');
     eCtx.drawImage(img, 0, 0, width, height);
 
-    // Dynamic blur radius calibrated to resolution
     if (currentSettings.blur > 0 || currentSettings.noiseRed > 0) {
         const previewScale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
         const scaleRatio = 1 / previewScale;
@@ -558,21 +566,33 @@ function processImageCanvas(img, currentSettings) {
 
 function renderPreview() {
     if (!originalImage) return;
-    canvas.width = previewWidth; canvas.height = previewHeight;
-    ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+    
+    // Adaptive Resolution: Drops quality to 25% while dragging so the UI doesn't freeze
+    const scale = isDragging ? 0.25 : 1.0;
+    const curW = Math.max(1, Math.floor(previewWidth * scale));
+    const curH = Math.max(1, Math.floor(previewHeight * scale));
+
+    canvas.width = curW; 
+    canvas.height = curH;
+    ctx.drawImage(originalImage, 0, 0, curW, curH);
 
     if (settings.blur > 0 || settings.noiseRed > 0) {
         let bRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20); 
+        bRad *= scale; // Scale blur to match lower resolution
         ctx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100); 
         ctx.filter = `blur(${bRad}px)`;
-        ctx.drawImage(originalImage, 0, 0, previewWidth, previewHeight);
+        ctx.drawImage(originalImage, 0, 0, curW, curH);
         ctx.filter = 'none'; ctx.globalAlpha = 1.0; 
     }
 
-    const imgData = ctx.getImageData(0, 0, previewWidth, previewHeight);
-    processPixels(imgData.data, previewWidth, previewHeight, settings);
+    const imgData = ctx.getImageData(0, 0, curW, curH);
+    processPixels(imgData.data, curW, curH, settings);
     ctx.putImageData(imgData, 0, 0);
-    applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
+    
+    // Sharpening is heavy, so we skip it entirely while dragging
+    if (!isDragging && settings.sharpen > 0) {
+        applySharpen(ctx, curW, curH, settings.sharpen);
+    }
 }
 
 document.getElementById('download-btn').onclick = () => {
