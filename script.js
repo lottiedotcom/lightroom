@@ -4,11 +4,6 @@ let originalImage = null;
 const MAX_PREVIEW_SIZE = 800; 
 let previewWidth = 0, previewHeight = 0;
 
-// Batch State
-let isBatchMode = false;
-let batchFiles = [];
-let batchIndex = 0;
-
 let settings = {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, curveHigh: 0, curveLight: 0, curveDark: 0, curveShadow: 0, whites: 0, blacks: 0,
     temp: 0, tint: 0, vibrance: 0, saturation: 0,
@@ -147,7 +142,9 @@ numInputs.forEach(numInp => {
 });
 
 // --- Upload & File Setup ---
-function loadFile(file) {
+document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
+document.getElementById('file-upload').addEventListener('change', (e) => {
+    const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -172,10 +169,7 @@ function loadFile(file) {
         originalImage.src = event.target.result;
     };
     reader.readAsDataURL(file);
-}
-
-document.getElementById('upload-btn').onclick = () => document.getElementById('file-upload').click();
-document.getElementById('file-upload').addEventListener('change', (e) => loadFile(e.target.files[0]));
+});
 
 // --- Intuitive Auto Enhancement ---
 document.getElementById('auto-btn').addEventListener('click', () => {
@@ -238,7 +232,7 @@ document.getElementById('auto-btn').addEventListener('click', () => {
     saveHistory();
 });
 
-// --- Presets & Batch Processing Engine ---
+// --- Presets & Batch Processing ---
 document.getElementById('copy-preset').onclick = () => { navigator.clipboard.writeText(JSON.stringify(settings)); alert('Preset copied! ✨'); };
 document.getElementById('paste-preset').onclick = async () => { try { const text = await navigator.clipboard.readText(); settings = { ...settings, ...JSON.parse(text) }; updateUI(); saveHistory(); } catch (e) { alert('Could not paste preset.'); }};
 document.getElementById('save-preset').onclick = () => { const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(settings)); a.download = "preset.json"; a.click(); };
@@ -246,53 +240,48 @@ document.getElementById('load-preset-btn').onclick = () => document.getElementBy
 document.getElementById('load-preset').addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { settings = { ...settings, ...JSON.parse(event.target.result) }; updateUI(); saveHistory(); }; reader.readAsText(file); });
 document.getElementById('reset-btn').onclick = () => { Object.keys(settings).forEach(key => settings[key] = (key === 'pickedH' ? -1 : 0)); updateUI(); saveHistory(); };
 
-// Batch Queue Interaction
+// --- Batch Process Engine ---
 const batchBtn = document.getElementById('batch-process-btn');
 const batchInput = document.getElementById('batch-file-input');
 
 batchBtn.onclick = () => batchInput.click();
 
-batchInput.addEventListener('change', (e) => {
+batchInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
-    
-    isBatchMode = true;
-    batchFiles = files;
-    batchIndex = 0;
-    
-    document.getElementById('batch-ui').style.display = 'flex';
-    document.querySelector('.bottom-nav').style.display = 'none'; // hide normal nav
-    loadBatchItem();
-});
 
-function loadBatchItem() {
-    if (batchIndex >= batchFiles.length) {
-        exitBatchMode();
-        return;
+    batchBtn.disabled = true;
+    batchBtn.textContent = `Processing 0/${files.length}... ⏳`;
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        batchBtn.textContent = `Processing ${i + 1}/${files.length}... ⏳`;
+        
+        await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const processedCanvas = processImageCanvas(img, settings);
+                    const a = document.createElement('a');
+                    const nameParts = file.name.split('.');
+                    const ext = nameParts.pop();
+                    a.download = `${nameParts.join('.')}_edited.jpg`;
+                    a.href = processedCanvas.toDataURL('image/jpeg', 0.95);
+                    a.click();
+                    setTimeout(resolve, 350);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
     }
-    document.getElementById('batch-count').innerText = `${batchIndex + 1} / ${batchFiles.length}`;
-    loadFile(batchFiles[batchIndex]);
-}
 
-function exitBatchMode() {
-    isBatchMode = false;
-    batchFiles = [];
-    document.getElementById('batch-ui').style.display = 'none';
-    document.querySelector('.bottom-nav').style.display = 'flex'; // restore normal nav
+    batchBtn.disabled = false;
+    batchBtn.textContent = '📦 Batch Apply & Export';
     batchInput.value = '';
     alert('Batch export complete! ✨');
-}
-
-document.getElementById('batch-download-btn').onclick = async () => {
-    await exportCurrentFile(); 
-    batchIndex++;
-    loadBatchItem();
-};
-document.getElementById('batch-skip-btn').onclick = () => {
-    batchIndex++;
-    loadBatchItem();
-};
-document.getElementById('batch-cancel-btn').onclick = exitBatchMode;
+});
 
 // --- Point Color Eyedropper ---
 let isPicking = false;
@@ -389,7 +378,7 @@ function getGradingColor(hue, sat, luminanceWeight) {
     ];
 }
 
-// --- Main Processing Engine (Your exact original CPU pixel logic) ---
+// --- Main Processing Engine ---
 function processPixels(data, width, height, currentSettings = settings) {
     const factor = (259 * (currentSettings.contrast + 255)) / (255 * (259 - currentSettings.contrast));
     const cx = width / 2; const cy = height / 2;
@@ -529,6 +518,42 @@ function applySharpen(ctx, w, h, amount) {
     ctx.putImageData(imgData, 0, 0);
 }
 
+// --- Unified Render Processor (Preview & High-Res Export) ---
+function processImageCanvas(img, currentSettings) {
+    const fullCanvas = document.createElement('canvas');
+    const width = img.naturalWidth || img.width;
+    const height = img.naturalHeight || img.height;
+    fullCanvas.width = width;
+    fullCanvas.height = height;
+    
+    const eCtx = fullCanvas.getContext('2d');
+    eCtx.drawImage(img, 0, 0, width, height);
+
+    // Dynamic blur radius calibrated to resolution
+    if (currentSettings.blur > 0 || currentSettings.noiseRed > 0) {
+        const previewScale = Math.min(1, MAX_PREVIEW_SIZE / Math.max(width, height));
+        const scaleRatio = 1 / previewScale;
+        const baseRad = currentSettings.blur > 0 ? 4 : (currentSettings.noiseRed / 20);
+        const bRad = Math.max(1, baseRad * scaleRatio);
+
+        eCtx.globalAlpha = currentSettings.blur > 0 ? (currentSettings.blur / 250) : (currentSettings.noiseRed / 100);
+        eCtx.filter = `blur(${bRad}px)`;
+        eCtx.drawImage(img, 0, 0, width, height);
+        eCtx.filter = 'none';
+        eCtx.globalAlpha = 1.0;
+    }
+
+    const imgData = eCtx.getImageData(0, 0, width, height);
+    processPixels(imgData.data, width, height, currentSettings);
+    eCtx.putImageData(imgData, 0, 0);
+
+    if (currentSettings.sharpen > 0) {
+        applySharpen(eCtx, width, height, currentSettings.sharpen);
+    }
+
+    return fullCanvas;
+}
+
 function renderPreview() {
     if (!originalImage) return;
     canvas.width = previewWidth; canvas.height = previewHeight;
@@ -548,51 +573,18 @@ function renderPreview() {
     applySharpen(ctx, previewWidth, previewHeight, settings.sharpen);
 }
 
-// --- Download Engine for Photos ---
-async function exportCurrentFile() {
+document.getElementById('download-btn').onclick = () => {
     if (!originalImage) return;
-    const btnId = isBatchMode ? 'batch-download-btn' : 'download-btn';
-    const btn = document.getElementById(btnId);
-    const prevText = btn.textContent;
+    const btn = document.getElementById('download-btn');
     btn.textContent = '⏳'; 
-
-    return new Promise(resolve => {
-        setTimeout(() => {
-            const exportCanvas = document.createElement('canvas');
-            const width = originalImage.naturalWidth || originalImage.width;
-            const height = originalImage.naturalHeight || originalImage.height;
-            exportCanvas.width = width; exportCanvas.height = height;
-            const eCtx = exportCanvas.getContext('2d');
-            eCtx.drawImage(originalImage, 0, 0, width, height);
-
-            if (settings.blur > 0 || settings.noiseRed > 0) {
-                const previewScale = Math.min(1, 800 / Math.max(width, height));
-                const scaleRatio = 1 / previewScale;
-                const baseRad = settings.blur > 0 ? 4 : (settings.noiseRed / 20);
-                const bRad = Math.max(1, baseRad * scaleRatio);
-        
-                eCtx.globalAlpha = settings.blur > 0 ? (settings.blur / 250) : (settings.noiseRed / 100);
-                eCtx.filter = `blur(${bRad}px)`;
-                eCtx.drawImage(originalImage, 0, 0, width, height);
-                eCtx.filter = 'none';
-                eCtx.globalAlpha = 1.0;
-            }
-
-            const imgData = eCtx.getImageData(0, 0, width, height);
-            processPixels(imgData.data, width, height, settings);
-            eCtx.putImageData(imgData, 0, 0);
-            if (settings.sharpen > 0) applySharpen(eCtx, width, height, settings.sharpen);
-
-            const a = document.createElement('a');
-            a.download = `edited_${Date.now()}.jpg`;
-            a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
-            a.click();
-            btn.textContent = prevText;
-            resolve();
-        }, 50);
-    });
-}
-
-document.getElementById('download-btn').onclick = () => exportCurrentFile();
+    setTimeout(() => {
+        const exportCanvas = processImageCanvas(originalImage, settings);
+        const a = document.createElement('a');
+        a.download = 'raw_edited.jpg';
+        a.href = exportCanvas.toDataURL('image/jpeg', 0.95);
+        a.click();
+        btn.textContent = '💾';
+    }, 50);
+};
 
 document.getElementById('panel-presets').classList.add('active');
